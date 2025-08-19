@@ -1,0 +1,1282 @@
+import tkinter as tk
+from tkinter import messagebox, filedialog
+import os
+import sys
+from datetime import datetime
+import tempfile
+import csv
+import io
+import requests
+import json
+from docx import Document
+from docx.shared import Inches, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import nsdecls
+from docx.oxml import parse_xml
+from docx.shared import RGBColor
+from utils import set_cell_background
+import re
+
+try:
+    from PIL import Image, ImageTk, ImageGrab
+except ImportError:
+    messagebox.showwarning("Missing Module", "PIL/Pillow is required for photo support. Install with: pip install pillow")
+    Image = None
+    ImageTk = None
+    ImageGrab = None
+
+class BidWriterApp:
+    def __init__(self, root, username, wo_number_to_load=None, on_save_callback=None):
+        self.root = root
+        self.root.title("Techvengers Bid Writer")
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        self.root.geometry(f"{int(screen_width * 0.9)}x{int(screen_height * 0.9)}")
+        
+        self.colors = {
+            'primary_blue': '#1e3a5f',
+            'light_blue': '#3498db',
+            'background': '#f8f9fa',
+            'white': '#ffffff',
+            'gray_light': '#e9ecef',
+            'gray_medium': '#6c757d',
+            'gray_dark': '#495057',
+            'green': '#28a745',
+            'selected': '#d4edda',
+            'preview_bg': '#f8f9fa',
+            'active_category_color': '#3A648F'
+        }
+        
+        self.root.configure(bg=self.colors['background'])
+
+        # Create a frame to hold the entire application content
+        self.app_frame = tk.Frame(self.root, bg=self.colors['background'])
+        self.app_frame.pack(fill='both', expand=True)
+
+        self.title_frame = tk.Frame(self.app_frame, bg=self.colors['primary_blue'], height=60)
+        self.title_frame.pack(fill='x', pady=(0, 10))
+        self.title_frame.pack_propagate(False)
+        
+        self.username_label = tk.Label(self.title_frame, text=f"{username}", 
+                                       font=("Arial", 12, "bold"), fg='white', 
+                                       bg=self.colors['primary_blue'])
+        self.username_label.pack(side="left", padx=20)
+        
+        self.title_label = tk.Label(self.title_frame, text="Techvengers Bid Writer", 
+                                     font=("Arial", 18, "bold"), fg='white', 
+                                     bg=self.colors['primary_blue'])
+        self.title_label.pack(side="left", expand=True, padx=(20, 0))
+
+        self.refresh_button = tk.Button(self.title_frame, text="Refresh",
+                                       font=("Arial", 10, "bold"), bg=self.colors['light_blue'], 
+                                       fg="white", relief="flat", cursor="hand2",
+                                       activebackground=self.colors['primary_blue'],
+                                       command=self.refresh_bids)
+        self.refresh_button.pack(side="right", padx=(0, 20))
+
+        self.categories = {}
+        self.all_items = {}
+        self.bid_data_url = "https://docs.google.com/spreadsheets/d/1sBPUtZqtoPREX2STfjBIs_kNF4HE4kCvsyloL9oC-tY/gviz/tq?tqx=out:csv&sheet=Sheet1"
+        
+        self.selected_items = {}
+        self.item_photos = {}
+        self.item_instances = {}
+        self.current_photo_item = None
+        self.active_category_button = None
+        self.active_category = None
+        
+        # New centered container for the "page" look
+        self.page_container = tk.Frame(self.app_frame, bg=self.colors['background'])
+        self.page_container.pack(fill='both', expand=True)
+        self.page_container.grid_columnconfigure(0, weight=1)
+        self.page_container.grid_rowconfigure(0, weight=1)
+
+        self.page_frame = tk.Frame(self.page_container, bg=self.colors['white'], relief="solid", bd=1)
+        self.page_frame.grid(row=0, column=0, sticky="nsew", padx=50, pady=20)
+
+        # Reparent all main UI elements to the new page_frame
+        self.category_frame = tk.Frame(self.page_frame, bg=self.colors['white'])
+        self.category_frame.pack(pady=10, anchor="w", padx=20, fill="x")
+
+        self.main_content_frame = tk.Frame(self.page_frame, bg=self.colors['white'])
+        self.main_content_frame.pack(pady=10, fill="both", expand=True, padx=20)
+        
+        self.canvas = tk.Canvas(self.main_content_frame, bg=self.colors['white'], 
+                                highlightthickness=1, highlightcolor=self.colors['gray_light'])
+        
+        self.v_scrollbar = tk.Scrollbar(self.main_content_frame, orient="vertical", 
+                                        command=self.canvas.yview, bg=self.colors['gray_light'])
+        
+        self.scrollable_frame = tk.Frame(self.canvas, bg=self.colors['white'])
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.v_scrollbar.set)
+
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        self.canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
+        
+        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+        self.scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
+        self.scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+
+        self.v_scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        
+        self.wo_frame = tk.Frame(self.page_frame, bg=self.colors['white'])
+        self.wo_frame.pack(pady=(10, 0), padx=20, fill='x')
+
+        self.wo_label = tk.Label(self.wo_frame, text="WO: ", 
+                                 font=("Arial", 11, "bold"), bg=self.colors['white'], 
+                                 fg=self.colors['primary_blue'])
+        self.wo_label.pack(side="left", padx=(0, 5))
+        self.wo_entry = tk.Entry(self.wo_frame, font=("Arial", 11), relief="solid", bd=1, width=20)
+        self.wo_entry.pack(side="left", padx=(0, 20))
+
+        self.load_state_button = tk.Button(self.wo_frame, text="Load State", command=self.load_state,
+                                           font=("Arial", 10, "bold"), bg=self.colors['light_blue'], fg="white",
+                                           relief="flat", cursor="hand2")
+        self.load_state_button.pack(side="left", padx=(0, 10))
+
+        self.save_state_button = tk.Button(self.wo_frame, text="Save State", command=self.save_state,
+                                           font=("Arial", 10, "bold"), bg=self.colors['light_blue'], fg="white",
+                                           relief="flat", cursor="hand2")
+        self.save_state_button.pack(side="left", padx=(0, 10))
+
+
+        self.buttons_container = tk.Frame(self.page_frame, bg=self.colors['white'])
+        self.buttons_container.pack(pady=10)
+
+        self.generate_button = tk.Button(self.buttons_container, text="Generate Bids", command=self.generate_bids,
+                                         font=("Arial", 12, "bold"), bg=self.colors['green'], 
+                                         fg="white", height=1, width=20, relief="solid", bd=1, cursor="hand2")
+        self.generate_button.pack(side="left", padx=(0, 10))
+
+        self.clear_button = tk.Button(self.buttons_container, text="Clear Bids", command=self.clear_bids,
+                                         font=("Arial", 12, "bold"), bg="#dc3545",
+                                         fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
+        self.clear_button.pack(side="left", padx=(0, 10))
+        
+        self.save_docs_button = tk.Button(self.buttons_container, text="Save to Docs", command=self.save_to_docs,
+                                         font=("Arial", 12, "bold"), bg=self.colors['primary_blue'], 
+                                         fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
+        self.save_docs_button.pack(side="left")
+
+        self.output_frame = tk.Frame(self.page_frame, bg=self.colors['gray_light'], relief="solid", bd=1)
+        self.output_frame.pack(padx=20, pady=(0, 10), fill='both', expand=False)
+        
+        self.output_header_frame = tk.Frame(self.output_frame, bg=self.colors['gray_light'])
+        self.output_header_frame.pack(fill='x', padx=2, pady=(2, 0))
+
+        self.bid_count_label = tk.Label(self.output_header_frame, text="Total Bids: 0",
+                                         font=("Arial", 11, "bold"), bg=self.colors['gray_light'],
+                                         fg=self.colors['gray_dark'], anchor="w")
+        self.bid_count_label.pack(side="left", padx=(8, 0))
+        
+        self.output_scrollbar = tk.Scrollbar(self.output_frame)
+        self.output_scrollbar.pack(side="right", fill="y")
+
+        self.output_text = tk.Text(self.output_frame, font=("Arial", 11), bg=self.colors['white'], 
+                                     wrap=tk.WORD, relief="flat", padx=10, pady=10, height=8,
+                                     yscrollcommand=self.output_scrollbar.set)
+        self.output_text.pack(fill='both', expand=True, padx=(2, 0), pady=2)
+        self.output_scrollbar.config(command=self.output_text.yview)
+
+        self.output_text.images = []
+
+        self.footer_frame = tk.Frame(self.app_frame, bg=self.colors['primary_blue'], height=40)
+        self.footer_frame.pack(fill='x', side='bottom')
+        self.footer_frame.pack_propagate(False)
+        
+        self.footer_label = tk.Label(self.footer_frame, text="All rights reserved Techvengers LTD", 
+                                     font=("Arial", 10), fg='white', 
+                                     bg=self.colors['primary_blue'])
+        self.footer_label.pack(expand=True)
+        
+        self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
+        os.makedirs(self.app_data_dir, exist_ok=True)
+        self.root.bind('<Control-v>', self.handle_global_paste)
+
+        self.on_save_callback = on_save_callback
+
+        self.load_bids_from_url(self.bid_data_url)
+        if wo_number_to_load:
+            self.wo_entry.insert(0, wo_number_to_load)
+            self.load_state()
+
+        self.root.after(300000, self.auto_save)
+
+    def auto_save(self):
+        wo_number = self.wo_entry.get().strip()
+        if not wo_number:
+            wo_number = f"AutoSave_{int(time.time())}"
+            self.wo_entry.delete(0, tk.END)
+            self.wo_entry.insert(0, wo_number)
+            
+        self.save_state(silent=True)
+        self.root.after(300000, self.auto_save)
+
+    def update_bid_buttons(self):
+        """Update category buttons and apply highlights based on search query."""
+        if self.active_category_button:
+            self.active_category_button.configure(bg=self.colors['light_blue'])
+        
+        for widget in self.category_frame.winfo_children():
+            widget.destroy()
+        
+        self.active_category_button = None
+        
+        for category in self.all_items:
+            bg_color = self.colors['light_blue']
+
+            btn = tk.Button(self.category_frame, text=category, width=20, height=2, 
+                             font=("Arial", 12, "bold"), bg=bg_color, 
+                             fg='white', relief="flat", cursor="hand2",
+                             activebackground=self.colors['primary_blue'], activeforeground='white')
+
+            btn.configure(command=lambda c=category, b=btn: self.load_items_with_highlight(c, b))
+            btn.bind("<Enter>", lambda e, b=btn: self.on_hover(b))
+            btn.bind("<Leave>", lambda e, b=btn: self.on_leave_button(b))
+            
+            btn.pack(side="left", padx=5)
+
+    def on_hover(self, button):
+        """Change button color on hover, unless it's the active button."""
+        if self.active_category_button and button.cget("text") == self.active_category_button.cget("text"):
+            pass
+        else:
+            button.configure(bg=self.colors['primary_blue'])
+
+    def on_leave_button(self, button):
+        """Restore button color on mouse leave, unless it's the active button."""
+        if self.active_category_button and button.cget("text") == self.active_category_button.cget("text"):
+            pass
+        else:
+            button.configure(bg=self.colors['light_blue'])
+        
+    def load_items_with_highlight(self, category, button):
+        """Load items and highlight the selected button."""
+        if self.active_category_button and self.active_category_button.winfo_exists():
+            self.active_category_button.configure(bg=self.colors['light_blue'])
+        
+        self.active_category_button = button
+        self.active_category_button.configure(bg=self.colors['active_category_color'])
+        
+        self.active_category = category
+        self.load_items(category)
+
+    def refresh_bids(self):
+        """Refreshes the bids by reloading from the online URL."""
+        self.load_bids_from_url(self.bid_data_url)
+        messagebox.showinfo("Refresh Complete", "Bid list has been refreshed successfully.")
+
+    def load_bids_from_url(self, url):
+        """Loads bid data from a public CSV file URL."""
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            
+            csv_data = io.StringIO(response.text)
+            reader = csv.DictReader(csv_data)
+            
+            self.categories = {}
+            for row in reader:
+                if 'Category' in row and 'Item' in row and 'Template' in row:
+                    category = row['Category']
+                    item_name = row['Item']
+                    template = row['Template']
+                    unit_price = row.get('Unit Price', '0.00')
+                    
+                    if category not in self.categories:
+                        self.categories[category] = []
+                    self.categories[category].append({'item_name': item_name, 'template': template, 'unit_price': unit_price})
+            
+            self.all_items = self.categories.copy()
+            
+        except requests.exceptions.RequestException as e:
+            messagebox.showwarning("Network Error", f"Could not connect to the online file. Using default bids.\nError: {e}")
+            self.load_default_bids()
+        except Exception as e:
+            messagebox.showwarning("Error", f"Failed to read data from online file. Using default bids.\nError: {e}")
+            self.load_default_bids()
+        
+        self.update_bid_buttons()
+        if self.categories:
+            self.active_category = list(self.categories.keys())[0]
+            first_button = self.category_frame.winfo_children()[0]
+            self.load_items_with_highlight(self.active_category, first_button)
+
+    def load_default_bids(self):
+        """Loads hardcoded default bids as a fallback."""
+        self.categories = {
+            "Landscaping": [
+                {'item_name': "Trim Shrubs", 'template': "Trim {quantity} LF of shrubs from the {location} of the property. Price includes time, labor and disposal of generated debris. {info}\nPrice: ${total:.2f}", 'unit_price': '15.00'},
+                {'item_name': "Trim Tree", 'template': "Trim {quantity} LF from the medium tree 30' tall and 18\" in diameter from {location} of the property. Price includes time, labor and disposal of generated debris. {info}\nPrice: ${total:.2f}", 'unit_price': '125.00'}
+            ],
+            "Mold": [
+                {'item_name': "Antimicrobial", 'template': "Clean & wipe {quantity} SF area of moldy walls in the {location}. Price includes time, labor, required materials and the removal of the generated debris. Must be approved with the Kilz bid. {info}\nPrice: ${total:.2f}", 'unit_price': '0.40'},
+                {'item_name': "Kilz", 'template': "Paint 1 coat of Kilz to {quantity} SF area of moldy walls in the {location}. Price includes time, labor, required materials and the removal of the generated debris. Source of the mold: roof leakage. Must be approved with the Kilz bid. {info}\nPrice: ${total:.2f}", 'unit_price': '0.50'}
+            ]
+        }
+        self.all_items = self.categories.copy()
+        
+    def load_items(self, category):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        grid_frame = tk.Frame(self.scrollable_frame, bg=self.colors['white'])
+        grid_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # This list defines the properties for each column
+        col_configs = [
+            (0, 40, 0),     # Key column
+            (1, 40, 0),     # Add/Delete column
+            (2, 120, 2),    # Item column
+            (3, 50, 0),     # Qty column
+            (4, 70, 1),     # Unit Price column
+            (5, 70, 0),     # Total Price column
+            (6, 120, 2),    # Location column
+            (7, 150, 2),    # Additional Info column
+            (8, 100, 1),    # Live Preview column
+            (9, 100, 2)     # Photo column
+        ]
+        
+        for col, min_width, weight in col_configs:
+            grid_frame.grid_columnconfigure(col, minsize=min_width, weight=int(weight))
+
+        headings = ["Key", "Add", "Item", "Qty", "Unit Price", "Total Price", "Location", "Additional Info", "Live Preview", "Photo"]
+        
+        for col, heading in enumerate(headings):
+            header_frame = tk.Frame(grid_frame, bg=self.colors['primary_blue'], relief="flat", bd=1)
+            header_frame.grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
+            
+            label = tk.Label(header_frame, text=heading, font=("Arial", 11, "bold"), 
+                             bg=self.colors['primary_blue'], fg='white', anchor="w")
+            label.pack(fill="both", expand=True, padx=8, pady=8)
+
+        if category not in self.selected_items:
+            self.selected_items[category] = {}
+        
+        if category not in self.item_instances:
+            self.item_instances[category] = {}
+
+        if category and category in self.all_items:
+            for item_data in self.all_items[category]:
+                item_name = item_data['item_name']
+                if item_name not in self.item_instances[category] or not self.item_instances[category][item_name]:
+                    self.item_instances[category][item_name] = [{
+                        'instance_id': 1,
+                        'display_name': item_name,
+                        'key': f"{item_name}_1"
+                    }]
+
+        row_idx = 1
+        if category and category in self.all_items:
+            all_instances_for_category = []
+            for item_name in self.item_instances[category]:
+                all_instances_for_category.extend(self.item_instances[category][item_name])
+            
+            all_instances_for_category.sort(key=lambda x: x['key'])
+
+            for instance_info in all_instances_for_category:
+                instance_key = instance_info['key']
+                display_name = instance_info['display_name']
+                original_name = re.sub(r'#.*', '', display_name).strip()
+                item_data = next((item for item in self.all_items[category] if item['item_name'] == original_name), None)
+                if not item_data: continue
+
+                if instance_key not in self.selected_items[category]:
+                    self.selected_items[category][instance_key] = {
+                        "selected": False,
+                        "template": item_data['template'],
+                        "qty": tk.StringVar(value="0"),
+                        "unit_price": tk.StringVar(value=item_data['unit_price']),
+                        "location": tk.StringVar(),
+                        "add_info": tk.StringVar(),
+                        "conjunction_key": tk.StringVar(),
+                        "total_price_label": None,
+                        "button": None,
+                        "preview_text": None,
+                        "original_name": original_name,
+                        "instance_info": instance_info,
+                        "photo_frame": None,
+                        "photo_label": None
+                    }
+
+                item_info = self.selected_items[category][instance_key]
+                
+                key_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+                key_cell.grid(row=row_idx, column=0, sticky="nsew", padx=1, pady=1)
+                key_entry = tk.Entry(key_cell, textvariable=item_info["conjunction_key"], font=("Arial", 9), justify="center", bg=self.colors['white'], relief="flat", bd=0, width=5)
+                key_entry.pack(fill="both", expand=True, padx=3, pady=3)
+
+                add_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                    bg=self.colors['gray_light'])
+                add_cell.grid(row=row_idx, column=1, sticky="nsew", padx=1, pady=1)
+                
+                if instance_info['instance_id'] == 1:
+                    def make_add_callback(cat=category, name=original_name):
+                        return lambda: self.add_item_instance(cat, name)
+                    
+                    add_btn = tk.Button(add_cell, text="+", font=("Arial", 12, "bold"),
+                                         bg=self.colors['light_blue'], fg='white', 
+                                         relief="flat", cursor="hand2",
+                                         activebackground=self.colors['primary_blue'],
+                                         command=make_add_callback())
+                    add_btn.pack(fill="both", expand=True, padx=2, pady=2)
+                else:
+                    def make_delete_callback(cat=category, orig_name=original_name, inst_key=instance_key):
+                        return lambda: self.delete_item_instance(cat, orig_name, inst_key)
+                    
+                    delete_btn = tk.Button(add_cell, text="X", font=("Arial", 10, "bold"),
+                                             bg='#dc3545', fg='white',
+                                             relief="flat", cursor="hand2",
+                                             activebackground='#c82333',
+                                             command=make_delete_callback())
+                    delete_btn.pack(fill="both", expand=True, padx=2, pady=2)
+
+                item_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                     bg=self.colors['gray_light'])
+                item_cell.grid(row=row_idx, column=2, sticky="nsew", padx=1, pady=1)
+                
+                def make_toggle_callback(cat=category, name=instance_key):
+                    return lambda: self.toggle_item(cat, name)
+
+                btn = tk.Button(item_cell, text=display_name, font=("Arial", 9),
+                                 bg=self.colors['selected'] if item_info["selected"] else self.colors['white'],
+                                 fg=self.colors['gray_dark'], anchor="w", relief="flat", cursor="hand2",
+                                 activebackground=self.colors['selected'],
+                                 command=make_toggle_callback())
+                btn.pack(fill="both", expand=True, padx=3, pady=3)
+                item_info["button"] = btn
+
+                qty_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                     bg=self.colors['gray_light'])
+                qty_cell.grid(row=row_idx, column=3, sticky="nsew", padx=1, pady=1)
+                qty_entry = tk.Entry(qty_cell, textvariable=item_info["qty"], font=("Arial", 9), 
+                                     justify="center", bg=self.colors['white'], 
+                                     relief="flat", bd=0)
+                qty_entry.pack(fill="both", expand=True, padx=3, pady=3)
+
+                price_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                      bg=self.colors['gray_light'])
+                price_cell.grid(row=row_idx, column=4, sticky="nsew", padx=1, pady=1)
+                unit_price_entry = tk.Entry(price_cell, textvariable=item_info["unit_price"], 
+                                             font=("Arial", 9), justify="center", 
+                                             bg=self.colors['white'], relief="flat", bd=0)
+                unit_price_entry.pack(fill="both", expand=True, padx=3, pady=3)
+
+                total_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                      bg=self.colors['gray_light'])
+                total_cell.grid(row=row_idx, column=5, sticky="nsew", padx=1, pady=1)
+                total_label = tk.Label(total_cell, text="0.00", font=("Arial", 9, "bold"), 
+                                        bg=self.colors['background'], fg=self.colors['gray_dark'],
+                                        justify="center")
+                total_label.pack(fill="both", expand=True, padx=3, pady=3)
+                item_info["total_price_label"] = total_label
+
+                location_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                         bg=self.colors['gray_light'])
+                location_cell.grid(row=row_idx, column=6, sticky="nsew", padx=1, pady=1)
+                location_entry = tk.Entry(location_cell, textvariable=item_info["location"], 
+                                         font=("Arial", 9), bg=self.colors['white'], 
+                                         relief="flat", bd=0)
+                location_entry.pack(fill="both", expand=True, padx=3, pady=3)
+
+                info_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                     bg=self.colors['gray_light'])
+                info_cell.grid(row=row_idx, column=7, sticky="nsew", padx=1, pady=1)
+                add_info_entry = tk.Entry(info_cell, textvariable=item_info["add_info"], 
+                                         font=("Arial", 9), bg=self.colors['white'], 
+                                         relief="flat", bd=0)
+                add_info_entry.pack(fill="both", expand=True, padx=3, pady=3)
+
+                preview_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                         bg=self.colors['gray_light'])
+                preview_cell.grid(row=row_idx, column=8, sticky="nsew", padx=1, pady=1)
+                
+                preview_text = tk.Text(preview_cell, font=("Arial", 9), 
+                                       bg=self.colors['preview_bg'], fg=self.colors['gray_dark'],
+                                       relief="flat", bd=0, wrap=tk.WORD, height=3,
+                                       state=tk.NORMAL)
+                preview_text.pack(fill="both", expand=True, padx=3, pady=3)
+                preview_text.bind("<KeyRelease>", lambda e, item=item_info: self.on_preview_text_change(item))
+                
+                item_info["preview_text"] = preview_text
+
+                photo_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                                      bg=self.colors['gray_light'])
+                photo_cell.grid(row=row_idx, column=9, sticky="nsew", padx=1, pady=1)
+                
+                photo_frame = tk.Frame(photo_cell, bg=self.colors['white'], relief="flat", 
+                                       bd=1, height=80)
+                photo_frame.pack(fill="both", expand=True, padx=3, pady=3)
+                photo_frame.pack_propagate(False)
+                
+                photo_label = tk.Label(photo_frame, text="Click to Select Photo", 
+                                       font=("Arial", 8), fg=self.colors['gray_medium'],
+                                       bg=self.colors['white'], cursor="hand2")
+                photo_label.pack(fill="both", expand=True)
+
+                photo_buttons_frame = tk.Frame(photo_frame, bg=self.colors['white'])
+                photo_buttons_frame.pack(side="bottom", fill="x", padx=3, pady=3)
+
+                paste_btn = tk.Button(photo_buttons_frame, text="Paste (Ctrl+V)",
+                                       font=("Arial", 7), bg=self.colors['light_blue'],
+                                       fg="white", relief="flat", cursor="hand2",
+                                       command=lambda c=category, k=instance_key: self.handle_paste(c, k))
+                paste_btn.pack(side="right", padx=(0, 2))
+
+                photo_frame.bind("<Enter>", lambda e, cell=photo_frame: self.on_enter(cell))
+                photo_frame.bind("<Leave>", lambda e, cell=photo_frame: self.on_leave(cell))
+                
+                item_info["photo_frame"] = photo_frame
+                item_info["photo_label"] = photo_label
+                
+                photo_key = f"{category}_{instance_key}"
+                if photo_key in self.item_photos and self.item_photos[photo_key]:
+                    self.load_photo_display(category, instance_key)
+                
+                def make_photo_callbacks(cat=category, key=instance_key):
+                    return {
+                        'click': lambda e: self.select_photo(cat, key),
+                    }
+                
+                callbacks = make_photo_callbacks()
+                photo_label.bind("<Button-1>", callbacks['click'])
+                photo_frame.bind("<Button-1>", callbacks['click'])
+                
+                def on_focus_in(event, cat=category, key=instance_key):
+                    self.current_photo_item = (cat, key)
+                
+                photo_frame.bind("<FocusIn>", on_focus_in)
+                photo_label.bind("<FocusIn>", on_focus_in)
+
+                item_info["qty"].trace_add("write", lambda *_args, i=item_info: self.update_total_and_preview(i))
+                item_info["unit_price"].trace_add("write", lambda *_args, i=item_info: self.update_total_and_preview(i))
+                item_info["location"].trace_add("write", lambda *_args, i=item_info: self.update_total_and_preview(i))
+                item_info["add_info"].trace_add("write", lambda *_args, i=item_info: self.update_total_and_preview(i))
+                item_info["conjunction_key"].trace_add("write", lambda *_args, i=item_info: self.update_all_previews())
+                
+                self.update_total_and_preview(item_info)
+                row_idx += 1
+        
+    def save_state(self, silent=False):
+        """Saves the current state of selected bids and photos to a JSON file."""
+        wo_number = self.wo_entry.get().strip()
+        if not wo_number:
+            if not silent:
+                messagebox.showwarning("Warning", "Please enter a Work Order Number to save the state.")
+            return
+
+        state = {
+            "selected_items": {},
+            "item_photos": {}
+        }
+
+        for category, items in self.selected_items.items():
+            state["selected_items"][category] = {}
+            for item_key, item_data in items.items():
+                state["selected_items"][category][item_key] = {
+                    "selected": item_data["selected"],
+                    "template": item_data["template"],
+                    "qty": item_data["qty"].get(),
+                    "unit_price": item_data["unit_price"].get(),
+                    "location": item_data["location"].get(),
+                    "add_info": item_data["add_info"].get(),
+                    "original_name": item_data["original_name"],
+                    "instance_info": item_data["instance_info"],
+                    "conjunction_key": item_data["conjunction_key"].get()
+                }
+        
+        for photo_key, photo_data in self.item_photos.items():
+            if photo_data and 'path' in photo_data and photo_data['path']:
+                state["item_photos"][photo_key] = photo_data['path']
+        
+        try:
+            state_file_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
+            with open(state_file_path, 'w') as f:
+                json.dump(state, f, indent=4)
+            if not silent:
+                messagebox.showinfo("Success", f"State saved successfully to:\n{os.path.basename(state_file_path)}")
+                if self.on_save_callback:
+                    self.on_save_callback()
+        except Exception as e:
+            if not silent:
+                messagebox.showerror("Error", f"Failed to save state: {e}")
+
+    def load_state(self):
+        """Loads a saved state from a JSON file and populates the UI."""
+        wo_number = self.wo_entry.get().strip()
+        if not wo_number:
+            messagebox.showwarning("Warning", "Please enter a Work Order Number to load the state.")
+            return
+        
+        state_file_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
+        if not os.path.exists(state_file_path):
+            messagebox.showerror("Error", f"No saved state found for WO '{wo_number}'.")
+            return
+        
+        try:
+            with open(state_file_path, 'r') as f:
+                state = json.load(f)
+            
+            self.selected_items = {}
+            self.item_photos = {}
+            self.item_instances = {}
+
+            for category, items in state.get("selected_items", {}).items():
+                self.selected_items[category] = {}
+                self.item_instances[category] = {}
+                
+                for item_key, item_data in items.items():
+                    original_name = item_data['original_name']
+                    instance_info = item_data.get('instance_info', {})
+                    
+                    if original_name not in self.item_instances[category]:
+                        self.item_instances[category][original_name] = []
+                    self.item_instances[category][original_name].append(instance_info)
+
+                    item_data["qty"] = tk.StringVar(value=item_data.get("qty", "0"))
+                    item_data["unit_price"] = tk.StringVar(value=item_data.get("unit_price", "0.00"))
+                    item_data["location"] = tk.StringVar(value=item_data.get("location", ""))
+                    item_data["add_info"] = tk.StringVar(value=item_data.get("add_info", ""))
+                    item_data["conjunction_key"] = tk.StringVar(value=item_data.get("conjunction_key", ""))
+                    self.selected_items[category][item_key] = item_data
+            
+            for photo_key, photo_path in state.get("item_photos", {}).items():
+                if os.path.exists(photo_path) and Image:
+                    image = Image.open(photo_path)
+                    self.item_photos[photo_key] = {'original': image, 'path': photo_path}
+            
+            self.update_bid_buttons()
+            if self.active_category:
+                self.load_items(self.active_category)
+            
+            messagebox.showinfo("Success", f"State for WO '{wo_number}' loaded successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load state: {e}")
+    
+    def select_photo(self, category, item_key):
+        file_path = filedialog.askopenfilename(
+            title="Select Photo",
+            filetypes=[
+                ("Image files", "*.jpg *.jpeg *.png *.gif *.bmp"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if file_path:
+            self.load_photo(file_path, category, item_key)
+    
+    def on_enter(self, widget):
+        """Highlight the frame on mouse enter."""
+        widget.configure(bg=self.colors['gray_light'])
+
+    def on_leave(self, widget):
+        """Reset the frame color on mouse leave."""
+        widget.configure(bg=self.colors['white'])
+        
+    def load_photo(self, file_path, category, item_key):
+        if Image is None:
+            messagebox.showerror("Error", "PIL/Pillow is required for photo support. Install with: pip install pillow")
+            return
+            
+        try:
+            image = Image.open(file_path)
+            
+            photo_key = f"{category}_{item_key}"
+            self.item_photos[photo_key] = {
+                'original': image,
+                'path': file_path
+            }
+            
+            self.load_photo_display(category, item_key)
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load image:\n{str(e)}")
+            
+    def load_photo_display(self, category, item_key):
+        """Displays a photo in the photo bucket from a stored image object."""
+        if Image is None: return
+        
+        photo_key = f"{category}_{item_key}"
+        if photo_key not in self.item_photos or not self.item_photos[photo_key]:
+            return
+            
+        try:
+            image_copy = self.item_photos[photo_key]['original'].copy()
+            image_copy.thumbnail((180, 100), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(image_copy)
+            
+            item_info = self.selected_items[category][item_key]
+            if item_info["photo_label"]:
+                item_info["photo_label"].configure(image=photo, text="")
+                item_info["photo_label"].image = photo
+                
+                remove_btn = tk.Button(item_info["photo_frame"], text="✕", 
+                                        font=("Arial", 8, "bold"), bg='red', fg='white',
+                                        command=lambda: self.remove_photo(category, item_key))
+                remove_btn.place(relx=1.0, rely=0.0, anchor='ne', width=20, height=20)
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to display image:\n{str(e)}")
+    
+    def remove_photo(self, category, item_key):
+        photo_key = f"{category}_{item_key}"
+        if photo_key in self.item_photos:
+            del self.item_photos[photo_key]
+        
+        item_info = self.selected_items[category][item_key]
+        if item_info["photo_label"]:
+            item_info["photo_label"].configure(image="", text="Click to Select Photo")
+            item_info["photo_label"].image = None
+        
+        for widget in item_info["photo_frame"].winfo_children():
+            if isinstance(widget, tk.Button) and widget.cget("text") == "✕":
+                widget.destroy()
+    
+    def handle_paste(self, category, item_key):
+        if Image is None or ImageGrab is None:
+            messagebox.showerror("Error", "PIL/Pillow is required for photo support. Install with: pip install pillow")
+            return
+            
+        try:
+            image = ImageGrab.grabclipboard()
+            
+            if image and isinstance(image, Image.Image):
+                photo_key = f"{category}_{item_key}"
+                self.item_photos[photo_key] = {
+                    'original': image,
+                    'path': None
+                }
+                
+                self.load_photo_display(category, item_key)
+            else:
+                messagebox.showinfo("Paste", "No image found in clipboard")
+        except:
+            messagebox.showinfo("Paste", "No image found in clipboard")
+    
+    def handle_global_paste(self, event):
+        if hasattr(self, 'current_photo_item') and self.current_photo_item:
+            category, item_key = self.current_photo_item
+            self.handle_paste(category, item_key)
+    
+    def add_item_instance(self, category, item_name):
+        item_data = next((item for item in self.all_items[category] if item['item_name'] == item_name), None)
+        if not item_data: return
+
+        if category not in self.item_instances:
+            self.item_instances[category] = {}
+        if item_name not in self.item_instances[category]:
+            self.item_instances[category][item_name] = []
+        
+        existing_numbers = [inst['instance_id'] for inst in self.item_instances[category][item_name]]
+        next_number = max(existing_numbers) + 1 if existing_numbers else 2
+        
+        new_instance = {
+            'instance_id': next_number,
+            'display_name': f"{item_name} #{next_number}",
+            'key': f"{item_name}_{next_number}"
+        }
+        
+        self.item_instances[category][item_name].append(new_instance)
+        
+        self.load_items(category)
+
+    def delete_item_instance(self, category, original_name, instance_key):
+        if category in self.item_instances and original_name in self.item_instances[category]:
+            self.item_instances[category][original_name] = [
+                inst for inst in self.item_instances[category][original_name] 
+                if inst['key'] != instance_key
+            ]
+            
+            if instance_key in self.selected_items[category]:
+                del self.selected_items[category][instance_key]
+            
+            photo_key = f"{category}_{instance_key}"
+            if photo_key in self.item_photos:
+                del self.item_photos[photo_key]
+        
+        self.load_items(category)
+
+    def update_total_and_preview(self, item_info):
+        try:
+            q_str = item_info["qty"].get().strip().replace(",", "")
+            p_str = item_info["unit_price"].get().strip().replace(",", "")
+            q = float(q_str) if q_str else 0.0
+            p = float(p_str) if p_str else 0.0
+            total = round(q * p, 2)
+            item_info["total_price_label"].config(text=f"{total:.2f}")
+        except ValueError:
+            item_info["total_price_label"].config(text="0.00")
+            total = 0.0
+
+        self.update_live_preview(item_info, total)
+
+    def update_live_preview(self, item, total_price):
+        if item["preview_text"] is None:
+            return
+            
+        current_text = item["preview_text"].get("1.0", tk.END).strip()
+        if hasattr(item, 'user_edited') and item['user_edited'] and current_text:
+            return
+        
+        qty = item["qty"].get().strip() or "0"
+        location = item["location"].get().strip() or "N/A"
+        add_info = item["add_info"].get().strip()
+        conjunction_key = item["conjunction_key"].get().strip().upper()
+
+        bid_text = item["template"].format(
+            quantity=qty,
+            location=location,
+            info=add_info,
+            total=total_price
+        )
+        
+        conjunction_prefix = ""
+        conjunction_suffix = ""
+
+        if conjunction_key and item["selected"]:
+            conjuncted_items = [
+                i for cat in self.selected_items.values() 
+                for i in cat.values() 
+                if i["conjunction_key"].get().strip().upper() == conjunction_key and i["selected"]
+            ]
+            
+            if len(conjuncted_items) > 1:
+                sorted_conjuncted_items = sorted(conjuncted_items, key=lambda i: i['instance_info']['key'])
+                current_instance_key = item['instance_info']['key']
+                
+                try:
+                    index = next(i for i, sub_item in enumerate(sorted_conjuncted_items) if sub_item['instance_info']['key'] == current_instance_key)
+                    number = index + 1
+                    conjunction_prefix = f"{conjunction_key}{number}: "
+                    conjunction_suffix = f"** {conjunction_key}1 to {conjunction_key}{len(conjuncted_items)} must be approved together **"
+                except StopIteration:
+                    conjunction_prefix = ""
+                    conjunction_suffix = ""
+                
+        final_bid_text = f"{conjunction_prefix}{bid_text}\n{conjunction_suffix}".strip()
+        
+        current_cursor = item["preview_text"].index(tk.INSERT)
+        current_selection = item["preview_text"].tag_ranges(tk.SEL)
+        
+        item["preview_text"].delete("1.0", tk.END)
+        item["preview_text"].insert("1.0", final_bid_text)
+        
+        try:
+            item["preview_text"].mark_set(tk.INSERT, current_cursor)
+            if current_selection:
+                item["preview_text"].tag_add(tk.SEL, current_selection[0], current_selection[1])
+        except:
+            pass
+
+    def toggle_item(self, category, item_key):
+        item = self.selected_items[category][item_key]
+        item["selected"] = not item["selected"]
+        
+        if item["button"]:
+            item["button"].configure(bg=self.colors['selected'] if item["selected"] else self.colors['white'])
+        
+        self.update_all_previews()
+
+    def update_all_previews(self):
+        for category_items in self.selected_items.values():
+            for item_info in category_items.values():
+                if item_info["preview_text"]:
+                    self.update_total_and_preview(item_info)
+    
+    def on_preview_text_change(self, item_info):
+        """Handle text changes in the Live Preview and update generated bids if they exist."""
+        item_info['user_edited'] = True
+        
+        if hasattr(self, 'output_text') and self.output_text.get("1.0", tk.END).strip():
+            self.update_generated_bids_from_preview(item_info)
+    
+    def update_generated_bids_from_preview(self, edited_item):
+        """Update the generated bids section when Live Preview text is edited."""
+        if not hasattr(self, 'output_text'):
+            return
+            
+        current_content = self.output_text.get("1.0", tk.END)
+        if not current_content.strip():
+            return
+        
+        item_key = edited_item['instance_info']['key']
+        
+        edited_text_lines = edited_item["preview_text"].get("1.0", tk.END).strip().split('\n')
+        
+        # We need to find the correct line in the output text to replace
+        output_lines = current_content.split('\n')
+        updated_lines = []
+        
+        found_match = False
+        for i, line in enumerate(output_lines):
+            # Try to match the line by its number and part of the content
+            # This is a bit fragile but should work for now
+            if line.strip().startswith(f"{edited_item['bid_number']}. ") and edited_item['original_name'] in line:
+                updated_lines.extend(edited_text_lines)
+                found_match = True
+            else:
+                updated_lines.append(line)
+        
+        if found_match:
+            self.output_text.config(state=tk.NORMAL)
+            self.output_text.delete("1.0", tk.END)
+            self.output_text.insert("1.0", '\n'.join(updated_lines))
+            self.output_text.config(state=tk.DISABLED)
+    
+    def save_to_docs(self):
+        bid_count = 0
+        final_bids = []
+        bid_photos = []
+
+        conjunction_groups = {}
+        standalone_bids = []
+        for category, category_items in self.selected_items.items():
+            for item in category_items.values():
+                if item["selected"]:
+                    conjunction_key = item["conjunction_key"].get().strip().upper()
+                    if conjunction_key:
+                        if conjunction_groups.get(conjunction_key) is None:
+                            conjunction_groups[conjunction_key] = []
+                        conjunction_groups[conjunction_key].append(item)
+                    else:
+                        standalone_bids.append(item)
+        
+        for key in conjunction_groups:
+            conjunction_groups[key].sort(key=lambda x: x['instance_info']['key'])
+        
+        all_selected_items = []
+        for key in sorted(conjunction_groups.keys()):
+            all_selected_items.extend(conjunction_groups[key])
+        all_selected_items.extend(sorted(standalone_bids, key=lambda x: x['instance_info']['key']))
+
+        if not all_selected_items:
+            messagebox.showwarning("No Bids Selected", "Please select some bids before saving to document!")
+            return
+
+        for i, item in enumerate(all_selected_items, 1):
+            bid_count += 1
+            
+            # Use the live preview text, as it may have been manually edited
+            bid_text = item["preview_text"].get("1.0", tk.END).strip()
+            if not bid_text and not item.get('user_edited', False):
+                # Fallback to generating from template if preview is empty
+                qty = item["qty"].get().strip().replace(",", "")
+                unit_price = item["unit_price"].get().strip().replace(",", "")
+                location = item["location"].get().strip()
+                add_info = item["add_info"].get().strip()
+                try:
+                    total_price = float(qty) * float(unit_price)
+                except ValueError:
+                    total_price = 0.0
+                bid_text = item["template"].format(
+                    quantity=qty or "0",
+                    location=location or "N/A",
+                    info=add_info or "",
+                    total=total_price
+                )
+            
+            final_bid_text = f"{bid_count}. {bid_text}"
+            
+            if conjunction_key and len(conjunction_groups[conjunction_key]) > 1:
+                conjunction_suffix = f"** {conjunction_key}1 to {conjunction_key}{len(conjunction_groups[conjunction_key])} must be approved together **"
+                final_bid_text = final_bid_text + f" {conjunction_suffix}"
+
+            final_bids.append(final_bid_text)
+
+            category_name = next(cat for cat, items in self.selected_items.items() if instance_key in items)
+            photo_key = f"{category_name}_{instance_key}"
+
+            if photo_key in self.item_photos and self.item_photos[photo_key]:
+                bid_photos.append(self.item_photos[photo_key])
+            else:
+                bid_photos.append(None)
+
+        try:
+            from docx import Document
+            from docx.shared import Inches, Cm
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import RGBColor
+            use_docx = True
+        except ImportError:
+            use_docx = False
+            messagebox.showinfo("Info", "python-docx not found. Saving as text file instead.\nTo save as Word document, install: pip install python-docx")
+
+        if use_docx:
+            doc = Document()
+            
+            wo_number = self.wo_entry.get().strip()
+            if wo_number:
+                doc.add_heading(f"Techvengers Bid Proposal - WO# {wo_number}", 0)
+            else:
+                doc.add_heading('Techvengers Bid Proposal', 0)
+            
+            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            date_paragraph = doc.add_paragraph(f'Date: {datetime.now().strftime("%B %d, %Y")}')
+            date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            doc.add_paragraph()
+            
+            table = doc.add_table(rows=1, cols=3)
+            table.style = 'Table Grid'
+            table.autofit = False
+            
+            table.columns[0].width = Inches(0.5)
+            table.columns[1].width = Inches(3.5)
+            table.columns[2].width = Inches(2.0)
+            
+            hdr_cells = table.rows[0].cells
+            
+            header_color_hex = self.colors['primary_blue'].lstrip('#')
+            set_cell_background(hdr_cells[0], header_color_hex)
+            set_cell_background(hdr_cells[1], header_color_hex)
+            set_cell_background(hdr_cells[2], header_color_hex)
+
+            for cell, text in zip(hdr_cells, ['SL No.', 'Bids', 'Photos']):
+                cell.text = text
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.color.rgb = RGBColor(255, 255, 255)
+                        run.font.bold = True
+            
+            for bid_text, photo_data in zip(final_bids, bid_photos):
+                row_cells = table.add_row().cells
+                match = re.match(r"(\d+)\. ", bid_text)
+                if match:
+                    row_cells[0].text = match.group(1)
+                    row_cells[1].text = bid_text[len(match.group(0)):]
+                else:
+                    row_cells[0].text = ""
+                    row_cells[1].text = bid_text
+                
+                if photo_data and photo_data['original']:
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                            temp_path = temp_file.name
+                            photo_data['original'].save(temp_path)
+                        
+                        row_cells[2].paragraphs[0].add_run().add_picture(temp_path, width=Inches(1.5))
+                        
+                        os.remove(temp_path)
+                    except Exception as e:
+                        print(f"Error adding image: {e}")
+                        row_cells[2].text = "Error loading image"
+            
+            doc.add_paragraph()
+            footer = doc.add_paragraph('Generated by Techvengers Bid Writer')
+            footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            footer_run = footer.runs[0]
+            footer_run.italic = True
+            
+            current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"Techvengers_Bids_{current_time}.docx"
+            
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".docx",
+                filetypes=[("Word Document", "*.docx"), ("All Files", "*.*")],
+                initialfile=default_filename,
+                title="Save Bids Document"
+            )
+            
+            if file_path:
+                doc.save(file_path)
+                messagebox.showinfo("Success", f"Bids saved successfully to:\n{file_path}")
+                
+                if messagebox.askyesno("Open File", "Would you like to open the saved document?"):
+                    try:
+                        if os.name == 'nt':
+                            os.startfile(file_path)
+                        elif sys.platform == 'darwin':
+                            os.system(f'open "{file_path}"')
+                        else:
+                            os.system(f'xdg-open "{file_path}"')
+                    except Exception as e:
+                        messagebox.showinfo("File Saved", f"Document saved successfully!\nLocation: {file_path}")
+        
+        else:
+            current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"Techvengers_Bids_{current_time}.txt"
+            
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text Document", "*.txt"), ("All Files", "*.*")],
+                initialfile=default_filename,
+                title="Save Bids Document"
+            )
+            
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    file.write("TECHVENGERS BID PROPOSAL\n")
+                    file.write("=" * 50 + "\n")
+                    file.write(f"Date: {datetime.now().strftime('%B %d, %Y')}\n\n")
+                    
+                    for bid_text, photo_data in zip(final_bids, bid_photos):
+                        file.write(f"{bid_text}\n")
+                        if photo_data:
+                            file.write("[Photo attached - see Word version for images]\n")
+                        file.write("\n")
+                        if bid_text != final_bids[-1]:
+                            file.write("─" * 50 + "\n\n")
+                    
+                    file.write("\nGenerated by Techvengers Bid Writer\n")
+                
+                messagebox.showinfo("Success", f"Bids saved successfully to:\n{file_path}")
+                
+                if messagebox.askyesno("Open File", "Would you like to open the saved document?"):
+                    try:
+                        if os.name == 'nt':
+                            os.startfile(file_path)
+                        elif sys.platform == 'darwin':
+                            os.system(f'open "{file_path}"')
+                        else:
+                            os.system(f'xdg-open "{file_path}"')
+                    except Exception as e:
+                        messagebox.showinfo("File Saved", f"Document saved successfully!\nLocation: {file_path}")
+    
+    def generate_bids(self):
+        self.output_text.config(state=tk.NORMAL)
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.images = [] 
+        
+        conjunction_groups = {}
+        standalone_bids = []
+        for cat_items in self.selected_items.values():
+            for item in cat_items.values():
+                if item["selected"]:
+                    conjunction_key = item["conjunction_key"].get().strip().upper()
+                    if conjunction_key:
+                        if conjunction_groups.get(conjunction_key) is None:
+                            conjunction_groups[conjunction_key] = []
+                        conjunction_groups[conjunction_key].append(item)
+                    else:
+                        standalone_bids.append(item)
+        
+        bid_number = 1
+        
+        for key in sorted(conjunction_groups.keys()):
+            items = conjunction_groups[key]
+            sorted_items = sorted(items, key=lambda x: x['instance_info']['key'])
+            for item in sorted_items:
+                bid_text, photo_key = self._get_item_bid_data(item)
+                
+                conjunction_text = f"** {key}1 to {key}{len(items)} must be approved together **"
+                numbered_bid = f"{bid_number}. {key}{i}: {bid_text} {conjunction_text}"
+                self.output_text.insert(tk.END, f"{numbered_bid}\n")
+                self._insert_photo(photo_key)
+                bid_number += 1
+        
+        for item in sorted(standalone_bids, key=lambda x: x['instance_info']['key']):
+            bid_text, photo_key = self._get_item_bid_data(item)
+            numbered_bid = f"{bid_number}. {bid_text}"
+            self.output_text.insert(tk.END, f"{numbered_bid}\n")
+            self._insert_photo(photo_key)
+            bid_number += 1
+
+        if bid_number == 1:
+            messagebox.showinfo("No Selections", "No bids selected!")
+            
+        self.bid_count_label.config(text=f"Total Bids: {bid_number - 1}")
+        self.output_text.config(state=tk.DISABLED)
+
+    def _get_item_bid_data(self, item):
+        """Return the text to use for an item's bid and the associated photo key.
+
+        Prefers the current Live Preview text (including any user edits). Falls back
+        to generating text from the item's template if the preview is empty or missing.
+        """
+        category = next((cat for cat, items in self.selected_items.items() if item in items.values()), None)
+        instance_key = item['instance_info']['key']
+        photo_key = f"{category}_{instance_key}"
+
+        # Prefer whatever is visible in the Live Preview cell
+        preview_widget = item.get("preview_text")
+        if preview_widget is not None:
+            preview_value = preview_widget.get("1.0", tk.END).strip()
+            if preview_value:
+                return preview_value, photo_key
+
+        # Fallback to constructing from the template
+        qty = item["qty"].get().strip().replace(",", "")
+        unit_price = item["unit_price"].get().strip().replace(",", "")
+        location = item["location"].get().strip()
+        add_info = item["add_info"].get().strip()
+
+        try:
+            total_price = float(qty) * float(unit_price)
+        except ValueError:
+            total_price = 0.0
+
+        bid_text = item["template"].format(
+            quantity=qty or "0",
+            location=location or "N/A",
+            info=add_info or "",
+            total=total_price
+        )
+        return bid_text, photo_key
+
+    def _insert_photo(self, photo_key):
+        if photo_key in self.item_photos and self.item_photos[photo_key]:
+            try:
+                self.output_text.insert(tk.END, "\n")
+                image_data = self.item_photos[photo_key]['original'].copy()
+                max_width, max_height = 400, 300
+                image_data.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+                photo_for_output = ImageTk.PhotoImage(image_data)
+                
+                self.output_text.image_create(tk.END, image=photo_for_output)
+                
+                self.output_text.images.append(photo_for_output)
+                
+                self.output_text.insert(tk.END, "\n\n")
+            except Exception as e:
+                print(f"Error inserting image: {e}")
+
+    def clear_bids(self):
+        """Clears the generated bids section and resets all inputs."""
+        self.output_text.config(state=tk.NORMAL)
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.config(state=tk.DISABLED)
+        self.bid_count_label.config(text="Total Bids: 0")
+        
+        self.output_text.images = []
+        
+        for category_items in self.selected_items.values():
+            for item_info in category_items.values():
+                item_info["selected"] = False
+                if item_info["button"]:
+                    item_info["button"].configure(bg=self.colors['white'])
+                item_info["qty"].set("0")
+                
+                original_name = item_info['original_name']
+                category_name = next(cat for cat, items in self.selected_items.items() 
+                                     for key, info in items.items() if info == item_info)
+                
+                initial_price = self.get_initial_price(category_name, original_name)
+                item_info["unit_price"].set(initial_price)
+                
+                item_info["location"].set("")
+                item_info["add_info"].set("")
+                item_info["conjunction_key"].set("")
+                item_info["user_edited"] = False
+                self.update_total_and_preview(item_info)
+    
+    def get_initial_price(self, category_name, item_name):
+        """Helper to find the initial price from the all_items data structure."""
+        if category_name in self.all_items and isinstance(self.all_items[category_name], list):
+            item_data = next((item_dict for item_dict in self.all_items[category_name] if item_dict.get('item_name') == item_name), None)
+            if item_data and 'unit_price' in item_data:
+                return item_data['unit_price']
+        
+        return "0.00"
