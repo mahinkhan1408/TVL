@@ -8,6 +8,7 @@ from gc_roof_ce_module import GCRoofCEModule
 from todo_module import ToDoModule
 from letterhead_bid_module import LetterheadBidModule
 from theme_manager import theme_manager
+from training_module import TrainingModule
 import time
 import os
 import re
@@ -180,6 +181,7 @@ class DashboardMenu:
             ("To-Do", "Tasks & reminders", "✅", self.open_todo),
             ("Note", "Notes (coming soon)", "🗒️", lambda: self.show_placeholder("Note")),
             ("Approval", "Approval workflow", "✔️", lambda: self.show_placeholder("Approval")),
+            ("Training", "Open the training module", "🎓", self.open_training),   # <-- inserted BEFORE Settings
             ("Settings", "Preferences", "⚙️", self.show_settings),
         ]
 
@@ -330,19 +332,22 @@ class DashboardMenu:
     # --- Dashboard Card Helper ---
     def _create_dashboard_card(self, parent, row, col, icon, title, subtitle, command):
         card_bg = self.colors['white'] if 'white' in self.colors else '#FFFFFF'
-        card = tk.Frame(parent, bg=card_bg, relief='flat', bd=0, highlightthickness=1,
-                        highlightbackground=self.colors['gray_light'])
-        card.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
-        parent.grid_rowconfigure(row, weight=1)
+        shadow_color = self.colors.get('shadow_gray', self.colors.get('gray_light', '#D0D0D0'))
 
-        # Hover effects
-        def on_enter(e):
-            card.configure(highlightbackground=self.colors.get('nav_hover', self.colors['primary_blue']),
-                           highlightthickness=2)
-        def on_leave(e):
-            card.configure(highlightbackground=self.colors['gray_light'], highlightthickness=1)
-        card.bind('<Enter>', on_enter)
-        card.bind('<Leave>', on_leave)
+        # Container cell (uses grid) to keep shape
+        cell = tk.Frame(parent, bg=self.colors['background'])
+        cell.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
+        parent.grid_rowconfigure(row, weight=1)
+        cell.grid_propagate(True)
+
+        # Shadow (hidden initially)
+        shadow = tk.Frame(cell, bg=shadow_color, bd=0, relief='flat')
+        shadow.place_forget()
+
+        # Card on top
+        card = tk.Frame(cell, bg=card_bg, relief='flat', bd=0,
+                        highlightthickness=1, highlightbackground=self.colors['gray_light'])
+        card.place(relx=0, rely=0, relwidth=1, relheight=1)
 
         inner = tk.Frame(card, bg=card_bg)
         inner.pack(fill='both', expand=True, padx=16, pady=14)
@@ -356,6 +361,26 @@ class DashboardMenu:
         tk.Label(inner, text=subtitle, font=("Segoe UI", 10),
                  bg=card_bg, fg=self.colors['gray_dark']).pack(anchor='w')
 
+        # Hover effects (outline + shadow) across the whole section
+        def on_enter(_e=None):
+            # Outline
+            card.configure(highlightbackground=self.colors.get('nav_hover', self.colors['primary_blue']),
+                           highlightthickness=2)
+            # Shadow slightly offset
+            try:
+                shadow.place(relx=0, rely=0, relwidth=1, relheight=1, x=3, y=3)
+                shadow.lift()  # make sure shadow draws under card
+                card.lift()
+            except Exception:
+                pass
+
+        def on_leave(_e=None):
+            card.configure(highlightbackground=self.colors['gray_light'], highlightthickness=1)
+            try:
+                shadow.place_forget()
+            except Exception:
+                pass
+
         # Click handler for all card area
         def handle_click(_e=None):
             try:
@@ -363,8 +388,15 @@ class DashboardMenu:
             except Exception as ex:
                 messagebox.showerror("Action", f"Failed to open: {ex}")
 
-        for w in (card, inner):
-            w.bind('<Button-1>', handle_click)
+        # Bind recursively so hovering anywhere triggers effects smoothly
+        def bind_recursive(widget):
+            widget.bind('<Enter>', lambda e: on_enter())
+            widget.bind('<Leave>', lambda e: on_leave())
+            widget.bind('<Button-1>', handle_click)
+            for child in widget.winfo_children():
+                bind_recursive(child)
+
+        bind_recursive(cell)
 
     def delete_bid_state(self, wo_number):
         if messagebox.askyesno("Confirm Delete", f"Are you sure you want to permanently delete the bid for WO# {wo_number}?"):
@@ -425,6 +457,14 @@ class DashboardMenu:
     def open_todo(self):
         new_window = tk.Toplevel(self.root)
         ToDoModule(new_window)
+
+    def open_training(self):
+        """Open the Training module in a new window."""
+        new_window = tk.Toplevel(self.root)
+        try:
+            TrainingModule(new_window)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open Training module: {e}")
 
     def show_settings(self):
         """Show the settings page with theme options."""

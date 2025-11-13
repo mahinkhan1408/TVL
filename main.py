@@ -34,6 +34,7 @@ class SplashScreen:
         self.root.destroy()
         login_root = tk.Tk()
         LoginPage(login_root)
+
         login_root.mainloop()
 
 if __name__ == "__main__":
