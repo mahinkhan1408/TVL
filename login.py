@@ -2,10 +2,8 @@
 import tkinter as tk
 from tkinter import messagebox
 import os
-import requests
 import json
-import csv
-import io
+import threading
 from dashboard_menu import DashboardMenu # Import the new DashboardMenu
 from theme_manager import theme_manager
 
@@ -40,16 +38,7 @@ class LoginPage:
                  font=("Arial", 18, "bold"), fg='white',
                  bg=self.colors['primary_blue']).pack(side="left", expand=True)
         
-        refresh_button_frame = self.create_shadow_button(
-            self.header_frame,
-            "Refresh Credentials",
-            self.refresh_credentials,
-            self.colors['light_blue'],
-            'white',
-            self.colors['shadow_gray'],
-            pady=2
-        )
-        refresh_button_frame.pack(side="right", padx=10, pady=(10, 10))
+        # Database will be initialized asynchronously
 
         self.login_frame = tk.Frame(self.main_frame, bg=self.colors['background'])
         self.login_frame.pack(expand=True)
@@ -86,14 +75,16 @@ class LoginPage:
         )
         login_button_frame.pack(pady=10)
         
-        self.credentials_url = "https://docs.google.com/spreadsheets/d/17ckYvmA47Sa5PJ0-KyqvlyoODMK2bLQWrZx1KofOvrc/gviz/tq?tqx=out:csv&sheet=Sheet1"
-        
         self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
         os.makedirs(self.app_data_dir, exist_ok=True)
         self.credentials_file = os.path.join(self.app_data_dir, "credentials.json")
 
         self.load_saved_credentials()
-        self.credentials = self.load_credentials_from_url(self.credentials_url)
+        
+        # Initialize database connection asynchronously
+        self.db = None
+        self.db_ready = False
+        self.init_database_async()
     
     def create_shadow_button(self, parent, text, command, button_bg, button_fg, shadow_bg, padx=10, pady=5):
         shadow_frame = tk.Frame(parent, bg=shadow_bg, bd=1, relief="solid")
@@ -113,31 +104,35 @@ class LoginPage:
         button.pack(padx=2, pady=2)
         return shadow_frame
         
-    def load_credentials_from_url(self, url):
-        credentials_dict = {}
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            
-            csv_data = io.StringIO(response.text)
-            reader = csv.DictReader(csv_data)
-            
-            for row in reader:
-                if 'Username' in row and 'Password' in row:
-                    credentials_dict[row['Username'].strip()] = row['Password'].strip()
-            return credentials_dict
-            
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("Network Error", f"Could not connect to online credentials file. Please check your internet connection.\nError: {e}")
-            return None
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to parse credentials file.\nError: {e}")
-            return None
-
-    def refresh_credentials(self):
-        self.credentials = self.load_credentials_from_url(self.credentials_url)
-        if self.credentials:
-            messagebox.showinfo("Refresh Complete", "Credentials have been refreshed successfully.")
+    def init_database_async(self):
+        """Initialize database connection asynchronously to prevent blocking UI."""
+        def init_in_thread():
+            try:
+                from database_online import OnlineDatabaseManager
+                db = OnlineDatabaseManager()
+                
+                # Update database reference in main thread
+                def update_db():
+                    self.db = db
+                    self.db_ready = True
+                    print("[Login] Database connection initialized successfully")
+                
+                self.master.after(0, update_db)
+            except Exception as e:
+                error_msg = str(e)
+                print(f"[Login] Database initialization error: {error_msg}")
+                
+                def set_error():
+                    self.db = None
+                    self.db_ready = False
+                    # Don't show error popup on startup - just log it
+                    # User can still try to login, and we'll show error then if needed
+                
+                self.master.after(0, set_error)
+        
+        # Start initialization in background thread
+        thread = threading.Thread(target=init_in_thread, daemon=True)
+        thread.start()
     
     def toggle_password(self):
         if self.show_password_var.get():
@@ -164,24 +159,48 @@ class LoginPage:
                 pass
     
     def login_check(self):
-        username = self.username_entry.get()
+        username = self.username_entry.get().strip()
         password = self.password_entry.get()
         
-        if self.credentials and username in self.credentials and self.credentials[username] == password:
-            if self.save_password_var.get():
-                self.save_password(username, password)
+        if not username or not password:
+            messagebox.showerror("Login Failed", "Please enter both username and password.")
+            return
+        
+        # Wait for database to be ready (with timeout)
+        if not self.db_ready:
+            if self.db is None:
+                messagebox.showerror("Database Error", 
+                    "Database connection is not available. Please check your internet connection and Supabase configuration.")
+                return
             else:
-                if os.path.exists(self.credentials_file):
-                    os.remove(self.credentials_file)
+                messagebox.showwarning("Loading", "Database is still connecting. Please wait a moment and try again.")
+                return
+        
+        try:
+            # Verify credentials against Supabase database
+            user = self.db.verify_user(username, password)
             
-            self.master.destroy()
-            
-            # Create a new root window for the dashboard menu
-            dashboard_root = tk.Tk()
-            app = DashboardMenu(dashboard_root, username=username) 
-            dashboard_root.mainloop()
-        else:
-            messagebox.showerror("Login Failed", "Invalid username or password.")
+            if user:
+                # Login successful
+                if self.save_password_var.get():
+                    self.save_password(username, password)
+                else:
+                    if os.path.exists(self.credentials_file):
+                        os.remove(self.credentials_file)
+                
+                self.master.destroy()
+                
+                # Create a new root window for the dashboard menu
+                dashboard_root = tk.Tk()
+                app = DashboardMenu(dashboard_root, username=username) 
+                dashboard_root.mainloop()
+            else:
+                messagebox.showerror("Login Failed", "Invalid username or password.")
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[Login] Error during login: {error_msg}")
+            messagebox.showerror("Login Error", 
+                f"An error occurred during login:\n{error_msg}\n\nPlease check your database connection.")
 
     def on_theme_changed(self, theme_name, colors):
         """Called when theme is changed globally."""

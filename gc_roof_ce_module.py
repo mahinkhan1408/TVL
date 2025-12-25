@@ -13,7 +13,7 @@ class GCRoofCEModule:
         self.root.title("GC/Roof CE - Cost Estimator")
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        self.root.geometry(f"{int(screen_width * 0.9)}x{int(screen_height * 0.7)}")
+        self.root.geometry(f"{int(screen_width * 0.9)}x{int(screen_height * 0.85)}")
         self.root.configure(bg='#f8f9fa')
 
         self.colors = {
@@ -33,8 +33,6 @@ class GCRoofCEModule:
         self.roof_pricing_data = {}
         self.combined_pricing_data_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRJEpqzTtW-2qqxzkI_QMkwwaYIEEHid_3j1blvxwovK7aVXWB0411eBZVjKZCEKFYaQ8VcLdPe_IU6/pub?output=csv"
         
-        self.load_all_pricing_data()
-        
         self.title_frame = tk.Frame(self.root, bg=self.colors['primary_blue'], height=60)
         self.title_frame.pack(fill='x', pady=(0, 10))
         self.title_frame.pack_propagate(False)
@@ -52,18 +50,86 @@ class GCRoofCEModule:
         self.main_content_frame = tk.Frame(self.root, bg=self.colors['background'], padx=20, pady=10)
         self.main_content_frame.pack(fill="both", expand=True)
 
-        self.notebook = ttk.Notebook(self.main_content_frame)
-        self.notebook.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        # Left side: Scrollable container for both sections
+        left_container = tk.Frame(self.main_content_frame, bg=self.colors['background'])
+        left_container.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
-        self.gc_tab = tk.Frame(self.notebook, bg=self.colors['white'], padx=15, pady=15, bd=1, relief="solid")
-        self.roof_tab = tk.Frame(self.notebook, bg=self.colors['white'], padx=15, pady=15, bd=1, relief="solid")
-        
-        self.notebook.add(self.gc_tab, text='  Grass Cut  ')
-        self.notebook.add(self.roof_tab, text='  Roofing  ')
+        # Canvas and scrollbar for scrollable content
+        self.left_canvas = tk.Canvas(left_container, bg=self.colors['background'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(left_container, orient="vertical", command=self.left_canvas.yview)
+        self.scrollable_content = tk.Frame(self.left_canvas, bg=self.colors['background'])
 
+        def update_scroll_region(event=None):
+            self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+
+        self.scrollable_content.bind("<Configure>", update_scroll_region)
+
+        canvas_window = self.left_canvas.create_window((0, 0), window=self.scrollable_content, anchor="nw")
+        self.left_canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Update canvas window width when canvas is resized
+        def configure_canvas_width(event):
+            canvas_width = event.width
+            self.left_canvas.itemconfig(canvas_window, width=canvas_width)
+        self.left_canvas.bind('<Configure>', configure_canvas_width)
+
+        scrollbar.pack(side="right", fill="y")
+        self.left_canvas.pack(side="left", fill="both", expand=True)
+
+        # Bind mouse wheel
+        def on_mousewheel(event):
+            self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.left_canvas.bind_all("<MouseWheel>", on_mousewheel)
+
+        # Grass Cut Section
+        gc_section_label = tk.Label(self.scrollable_content, text="Grass Cut", 
+                                     font=("Arial", 16, "bold"), bg=self.colors['background'], 
+                                     fg=self.colors['primary_blue'])
+        gc_section_label.pack(anchor="w", pady=(0, 10))
+
+        self.gc_tab = tk.Frame(self.scrollable_content, bg=self.colors['white'], padx=15, pady=15, bd=1, relief="solid")
+        self.gc_tab.pack(fill="x", pady=(0, 15))
         self.build_gc_frame(self.gc_tab)
+
+        # Buttons for Grass Cut section
+        gc_buttons_frame = tk.Frame(self.scrollable_content, bg=self.colors['background'])
+        gc_buttons_frame.pack(fill="x", pady=(0, 20))
+
+        self.gc_generate_button = tk.Button(gc_buttons_frame, text="Generate Bids", command=self.generate_bids,
+                                            font=("Arial", 12, "bold"), bg=self.colors['green'], 
+                                            fg="white", height=1, width=20, relief="solid", bd=1, cursor="hand2")
+        self.gc_generate_button.pack(side="left", padx=(0, 10))
+        
+        self.gc_clear_button = tk.Button(gc_buttons_frame, text="Clear Bids", command=self.clear_bids,
+                                          font=("Arial", 12, "bold"), bg="#dc3545",
+                                          fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
+        self.gc_clear_button.pack(side="left", padx=(0, 10))
+
+        # Roofing Section
+        roof_section_label = tk.Label(self.scrollable_content, text="Roofing", 
+                                       font=("Arial", 16, "bold"), bg=self.colors['background'], 
+                                       fg=self.colors['primary_blue'])
+        roof_section_label.pack(anchor="w", pady=(0, 10))
+
+        self.roof_tab = tk.Frame(self.scrollable_content, bg=self.colors['white'], padx=15, pady=15, bd=1, relief="solid")
+        self.roof_tab.pack(fill="x", pady=(0, 15))
         self.build_roof_frame(self.roof_tab)
 
+        # Buttons for Roofing section
+        roof_buttons_frame = tk.Frame(self.scrollable_content, bg=self.colors['background'])
+        roof_buttons_frame.pack(fill="x", pady=(0, 10))
+
+        self.roof_generate_button = tk.Button(roof_buttons_frame, text="Generate Bids", command=self.generate_bids,
+                                               font=("Arial", 12, "bold"), bg=self.colors['green'], 
+                                               fg="white", height=1, width=20, relief="solid", bd=1, cursor="hand2")
+        self.roof_generate_button.pack(side="left", padx=(0, 10))
+        
+        self.roof_clear_button = tk.Button(roof_buttons_frame, text="Clear Bids", command=self.clear_bids,
+                                           font=("Arial", 12, "bold"), bg="#dc3545",
+                                           fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
+        self.roof_clear_button.pack(side="left", padx=(0, 10))
+
+        # Right side: Output frame
         self.output_frame = tk.Frame(self.main_content_frame, bg=self.colors['output_bg'], bd=1, relief="solid")
         self.output_frame.pack(side="right", fill="both", expand=True)
 
@@ -73,24 +139,9 @@ class GCRoofCEModule:
         self.generated_bid_text = tk.Text(self.output_frame, font=("Arial", 11), bg=self.colors['white'], 
                                           wrap=tk.WORD, relief="flat", padx=10, pady=10)
         self.generated_bid_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-
-        self.buttons_container = tk.Frame(self.root, bg=self.colors['background'])
-        self.buttons_container.pack(pady=10)
         
-        self.generate_button = tk.Button(self.buttons_container, text="Generate Bids", command=self.generate_bids,
-                                         font=("Arial", 12, "bold"), bg=self.colors['green'], 
-                                         fg="white", height=1, width=20, relief="solid", bd=1, cursor="hand2")
-        self.generate_button.pack(side="left", padx=(0, 10))
-        
-        self.clear_button = tk.Button(self.buttons_container, text="Clear Bids", command=self.clear_bids,
-                                         font=("Arial", 12, "bold"), bg="#dc3545",
-                                         fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
-        self.clear_button.pack(side="left", padx=(0, 10))
-        
-        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
-
-    def on_tab_changed(self, event):
-        self.live_update_bid()
+        # Load pricing data after UI is created
+        self.load_all_pricing_data()
 
     def build_gc_frame(self, parent_frame):
         parent_frame.grid_columnconfigure(0, weight=1)
@@ -232,7 +283,9 @@ class GCRoofCEModule:
             messagebox.showerror("Network Error", f"Could not load pricing data. Please check the URL and internet connection. Error: {e}")
             self.set_default_fallback_data()
         
-        self.live_update_bid()
+        # Only update bid if UI elements exist
+        if hasattr(self, 'generated_bid_text') and self.generated_bid_text.winfo_exists():
+            self.live_update_bid()
 
     def set_default_fallback_data(self):
         self.gc_pricing_data = {
@@ -274,12 +327,16 @@ class GCRoofCEModule:
 
     def live_update_bid(self, event=None):
         try:
-            if not hasattr(self, 'notebook') or not self.notebook.winfo_exists() or not self.notebook.select(): return
-            active_tab_text = self.notebook.tab(self.notebook.select(), "text").strip()
+            # Check if UI elements exist before trying to use them
+            if not hasattr(self, 'generated_bid_text') or not self.generated_bid_text.winfo_exists():
+                return
+            
             self.generated_bid_text.delete("1.0", tk.END)
+            bid_parts = []
 
-            if active_tab_text == "Grass Cut":
-                try:
+            # Update Grass Cut section
+            try:
+                if hasattr(self, 'grass_height_entry') and self.grass_height_entry.winfo_exists():
                     grass_height_str = self.grass_height_entry.get()
                     maintainable_lot_str = self.maintainable_lot_entry.get()
                     total_lot_str = self.total_lot_entry.get()
@@ -287,23 +344,31 @@ class GCRoofCEModule:
                     grass_height_input = float(grass_height_str) if grass_height_str.replace('.', '', 1).isdigit() else 0.0
                     maintainable_lot = float(maintainable_lot_str) if maintainable_lot_str.replace('.', '', 1).isdigit() else 0.0
                     total_lot = float(total_lot_str) if total_lot_str.replace('.', '', 1).isdigit() else 0.0
+                    
+                    # Always calculate and update price label
                     calculated_price, price_error_msg = self.calculate_grass_cut_price(grass_height_input, maintainable_lot)
-                    self.gc_calculated_price_label.config(text=f"${calculated_price:.2f}" if not price_error_msg else price_error_msg)
-                    grass_condition_text = "over the allowable" if grass_height_input > 12 else "allowable" if 0 < grass_height_input <= 12 else "[Invalid Height]"
-                    pricing_tier = None
-                    if 2 <= grass_height_input <= 12: pricing_tier = "2\"-12\""
-                    elif 12 < grass_height_input <= 24: pricing_tier = "12\"-24\""
-                    elif 24 < grass_height_input <= 36: pricing_tier = "24\"-36\""
-                    elif 36 < grass_height_input <= 48: pricing_tier = "36\"-48\""
-                    elif grass_height_input > 48: pricing_tier = "Above 48\""
-                    bid_template = self.gc_pricing_data.get(pricing_tier, {}).get('template', "")
-                    generated_bid = bid_template.format(grass_condition=grass_condition_text, grass_height=grass_height_str, maintainable_lot=maintainable_lot_str, total_lot=total_lot_str, disclaimer=disclaimer_text_content)
-                    self.generated_bid_text.insert("1.0", generated_bid)
-                except Exception as e:
-                    self.generated_bid_text.insert("1.0", f"Error in GC tab: {e}")
+                    if hasattr(self, 'gc_calculated_price_label') and self.gc_calculated_price_label.winfo_exists():
+                        self.gc_calculated_price_label.config(text=f"${calculated_price:.2f}" if not price_error_msg else price_error_msg)
+                    
+                    # Only generate bid text if there's valid input
+                    if grass_height_input > 0 or maintainable_lot > 0:
+                        grass_condition_text = "over the allowable" if grass_height_input > 12 else "allowable" if 0 < grass_height_input <= 12 else "[Invalid Height]"
+                        pricing_tier = None
+                        if 2 <= grass_height_input <= 12: pricing_tier = "2\"-12\""
+                        elif 12 < grass_height_input <= 24: pricing_tier = "12\"-24\""
+                        elif 24 < grass_height_input <= 36: pricing_tier = "24\"-36\""
+                        elif 36 < grass_height_input <= 48: pricing_tier = "36\"-48\""
+                        elif grass_height_input > 48: pricing_tier = "Above 48\""
+                        bid_template = self.gc_pricing_data.get(pricing_tier, {}).get('template', "")
+                        if bid_template:
+                            gc_bid = bid_template.format(grass_condition=grass_condition_text, grass_height=grass_height_str, maintainable_lot=maintainable_lot_str, total_lot=total_lot_str, disclaimer=disclaimer_text_content)
+                            bid_parts.append(("GRASS CUT", gc_bid))
+            except Exception as e:
+                pass
 
-            elif active_tab_text == "Roofing":
-                try:
+            # Update Roofing section
+            try:
+                if hasattr(self, 'roof_area_entry') and self.roof_area_entry.winfo_exists():
                     roof_area = float(self.roof_area_entry.get() or 0)
                     edge_metal = float(self.edge_metal_entry.get() or 0)
                     ridge_cap = float(self.ridge_cap_entry.get() or 0)
@@ -311,53 +376,66 @@ class GCRoofCEModule:
                     storey = int(self.selected_storey.get())
                     client = self.selected_client.get()
                     
+                    # Always calculate and update price labels
                     tarp_price, tarp_error = self.calculate_roof_price("Tarp", roof_area, storey, client)
                     replace_price, replace_error = self.calculate_roof_price("Replace", roof_area, storey, client)
 
-                    self.tarp_price_label.config(text=f"${tarp_price:.2f}" if not tarp_error else tarp_error)
-                    self.replacement_price_label.config(text=f"${replace_price:.2f}" if not replace_error else replace_error)
-
-                    replace_bid_template = (
-                        "Remove and replace approximately {roof_area} SF Roof. Includes removal and replacement of {roof_area} SF asphalt shingles, "
-                        "removal and replacement of {roof_area} SF area of felt, removal and replacement of {edge_metal} LF of edge metal, "
-                        "removal and replacement of {ice_shield} SF of ice and water shield, removal and replacement of {flashing} LF of flashing, "
-                        "removal and replacement of {ridge_cap} LF ridge cap, {roof_jack} roof jack. Permit will be pulled an invoiced if needed. "
-                        "If additional damage is found in the roof decking, $175.00 will be needed for each 32 SF of decking* May take 5-6 weeks to complete. "
-                        "Price includes time, labor, materials and the removal of the generated debris.\nPrice: ${price:.2f}"
-                    )
+                    if hasattr(self, 'tarp_price_label') and self.tarp_price_label.winfo_exists():
+                        self.tarp_price_label.config(text=f"${tarp_price:.2f}" if not tarp_error else tarp_error)
+                    if hasattr(self, 'replacement_price_label') and self.replacement_price_label.winfo_exists():
+                        self.replacement_price_label.config(text=f"${replace_price:.2f}" if not replace_error else replace_error)
                     
-                    tarp_bid_template = (
-                        "Install heavy duty brown/black {roof_area} SF tarp on a leaking roof. The tarp must be secured with furring strips around the perimeter and slope of the roof. "
-                        "Secure the tarp with an adequate number of furring strips throughout the roof to hold the tarp during heavy wind. "
-                        "*Note: This is a temporary solution only, roof replacement is recommended.\nPrice: ${price:.2f}"
-                    )
+                    # Only generate bid text if there's valid input
+                    if roof_area > 0:
 
-                    generated_bid = replace_bid_template.format(
-                        roof_area=f"{roof_area:.2f}",
-                        edge_metal=f"{edge_metal:.2f}",
-                        ice_shield=f"{0.2 * roof_area:.2f}",
-                        flashing=f"{0.15 * roof_area:.2f}",
-                        ridge_cap=f"{ridge_cap:.2f}",
-                        roof_jack=f"{roof_jack:.2f}",
-                        price=replace_price
-                    ) + "\n\n" + tarp_bid_template.format(
-                        roof_area=f"{roof_area:.2f}",
-                        price=tarp_price
-                    )
-                    self.generated_bid_text.insert("1.0", generated_bid)
-                except Exception as e:
-                    self.generated_bid_text.insert("1.0", f"Error in Roofing tab: {e}")
+                        replace_bid_template = (
+                            "Remove and replace approximately {roof_area} SF Roof. Includes removal and replacement of {roof_area} SF asphalt shingles, "
+                            "removal and replacement of {roof_area} SF area of felt, removal and replacement of {edge_metal} LF of edge metal, "
+                            "removal and replacement of {ice_shield} SF of ice and water shield, removal and replacement of {flashing} LF of flashing, "
+                            "removal and replacement of {ridge_cap} LF ridge cap, {roof_jack} roof jack. Permit will be pulled an invoiced if needed. "
+                            "If additional damage is found in the roof decking, $175.00 will be needed for each 32 SF of decking* May take 5-6 weeks to complete. "
+                            "Price includes time, labor, materials and the removal of the generated debris.\nPrice: ${price:.2f}"
+                        )
+                        
+                        tarp_bid_template = (
+                            "Install heavy duty brown/black {roof_area} SF tarp on a leaking roof. The tarp must be secured with furring strips around the perimeter and slope of the roof. "
+                            "Secure the tarp with an adequate number of furring strips throughout the roof to hold the tarp during heavy wind. "
+                            "*Note: This is a temporary solution only, roof replacement is recommended.\nPrice: ${price:.2f}"
+                        )
+
+                        roof_bid = replace_bid_template.format(
+                            roof_area=f"{roof_area:.2f}",
+                            edge_metal=f"{edge_metal:.2f}",
+                            ice_shield=f"{0.2 * roof_area:.2f}",
+                            flashing=f"{0.15 * roof_area:.2f}",
+                            ridge_cap=f"{ridge_cap:.2f}",
+                            roof_jack=f"{roof_jack:.2f}",
+                            price=replace_price
+                        ) + "\n\n" + tarp_bid_template.format(
+                            roof_area=f"{roof_area:.2f}",
+                            price=tarp_price
+                        )
+                        bid_parts.append(("ROOFING", roof_bid))
+            except Exception as e:
+                pass
+
+            # Display combined bids
+            if bid_parts:
+                combined_bid = "\n\n".join([f"=== {title} ===\n{content}" for title, content in bid_parts])
+                self.generated_bid_text.insert("1.0", combined_bid)
+            else:
+                self.generated_bid_text.insert("1.0", "Enter details to generate bid...")
         except Exception as e:
-            messagebox.showerror("Error", f"An unexpected error occurred during bid generation: {e}")
-            self.generated_bid_text.delete("1.0", tk.END)
-            self.generated_bid_text.insert("1.0", f"Error: {e}")
+            # Only show error if UI elements exist
+            if hasattr(self, 'generated_bid_text') and self.generated_bid_text.winfo_exists():
+                messagebox.showerror("Error", f"An unexpected error occurred during bid generation: {e}")
+                self.generated_bid_text.delete("1.0", tk.END)
+                self.generated_bid_text.insert("1.0", f"Error: {e}")
 
     def generate_bids(self):
-        final_bid_text = self.generated_bid_text.get("1.0", tk.END).strip()
-        if not final_bid_text or "Error" in final_bid_text:
-            messagebox.showwarning("No Valid Bid", "Please correct inputs before generating bid.")
-            return
-        messagebox.showinfo("Generated Bid", f"Final Bid:\n\n{final_bid_text}")
+        # Simply update the bid display - no popup needed
+        # The bid is already displayed in the right side section via live_update_bid
+        self.live_update_bid()
 
     def clear_bids(self):
         self.grass_height_entry.delete(0, tk.END); self.grass_height_entry.insert(0, "0")

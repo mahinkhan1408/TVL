@@ -9,6 +9,7 @@ import csv
 import io
 import requests
 import json
+import threading
 from docx import Document
 from docx.shared import Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -28,9 +29,10 @@ except ImportError:
     ImageGrab = None
 
 class BidWriterApp:
-    def __init__(self, root, username, wo_number_to_load=None, on_save_callback=None):
+    def __init__(self, root, username, wo_number_to_load=None, property_address=None, user_id=None, client_code=None, wo_type=None, on_save_callback=None):
         self.root = root
         self.root.title("Techvengers Bid Writer")
+        self.property_address = property_address or ""
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         self.root.geometry(f"{int(screen_width * 0.9)}x{int(screen_height * 0.9)}")
@@ -42,6 +44,21 @@ class BidWriterApp:
         theme_manager.register_theme_callback(self.on_theme_changed)
         
         self.root.configure(bg=self.colors['background'])
+        
+        # Store username and user_id
+        self.username = username
+        self.user_id = user_id
+        try:
+            from database_online import OnlineDatabaseManager
+            self.db = OnlineDatabaseManager()
+            # If user_id not provided, try to get it from database
+            if not self.user_id:
+                user = self.db.get_user(username)
+                if user:
+                    self.user_id = user['id']
+        except Exception as e:
+            print(f"Warning: Could not initialize database: {e}")
+            self.db = None
 
         self.title_frame = tk.Frame(self.root, bg=self.colors['primary_blue'], height=60)
         self.title_frame.pack(fill='x', pady=(0, 10))
@@ -177,15 +194,44 @@ class BidWriterApp:
                                  font=("Arial", 11, "bold"), bg=self.colors['background'], 
                                  fg=self.colors['primary_blue'])
         self.wo_label.pack(side="left", padx=(0, 5))
-        self.wo_entry = tk.Entry(self.wo_frame, font=("Arial", 11), relief="solid", bd=1, width=20, bg=self.colors['white'], fg=self.colors['text_primary'])
+        self.wo_entry = tk.Entry(self.wo_frame, font=("Arial", 11), relief="solid", bd=1, width=20, bg=self.colors['gray_light'], fg=self.colors['text_primary'], state='readonly')
         self.wo_entry.pack(side="left", padx=(0, 20))
+        if wo_number_to_load:
+            self.wo_entry.config(state='normal')
+            self.wo_entry.insert(0, wo_number_to_load)
+            self.wo_entry.config(state='readonly')
+        
+        # Property Address field
+        self.address_label = tk.Label(self.wo_frame, text="Property Address: ", 
+                                      font=("Arial", 11, "bold"), bg=self.colors['background'], 
+                                      fg=self.colors['primary_blue'])
+        self.address_label.pack(side="left", padx=(0, 5))
+        self.address_entry = tk.Entry(self.wo_frame, font=("Arial", 11), relief="solid", bd=1, width=40, bg=self.colors['gray_light'], fg=self.colors['text_primary'], state='readonly')
+        self.address_entry.pack(side="left", padx=(0, 20))
+        if self.property_address:
+            self.address_entry.insert(0, self.property_address)
+        
+        # Client Code field
+        self.client_code_label = tk.Label(self.wo_frame, text="Client Code: ", 
+                                         font=("Arial", 11, "bold"), bg=self.colors['background'], 
+                                         fg=self.colors['primary_blue'])
+        self.client_code_label.pack(side="left", padx=(0, 5))
+        self.client_code_entry = tk.Entry(self.wo_frame, font=("Arial", 11), relief="solid", bd=1, width=15, bg=self.colors['gray_light'], fg=self.colors['text_primary'], state='readonly')
+        self.client_code_entry.pack(side="left", padx=(0, 20))
+        if client_code:
+            self.client_code_entry.insert(0, client_code)
+        
+        # WO Type field
+        self.wo_type_label = tk.Label(self.wo_frame, text="WO Type: ", 
+                                     font=("Arial", 11, "bold"), bg=self.colors['background'], 
+                                     fg=self.colors['primary_blue'])
+        self.wo_type_label.pack(side="left", padx=(0, 5))
+        self.wo_type_entry = tk.Entry(self.wo_frame, font=("Arial", 11), relief="solid", bd=1, width=20, bg=self.colors['gray_light'], fg=self.colors['text_primary'], state='readonly')
+        self.wo_type_entry.pack(side="left", padx=(0, 20))
+        if wo_type:
+            self.wo_type_entry.insert(0, wo_type)
 
-        self.load_state_button = tk.Button(self.wo_frame, text="Load State", command=self.load_state,
-                                           font=("Arial", 10, "bold"), bg=self.colors['light_blue'], fg="white",
-                                           relief="flat", cursor="hand2")
-        self.load_state_button.pack(side="left", padx=(0, 10))
-
-        self.save_state_button = tk.Button(self.wo_frame, text="Save State", command=self.save_state,
+        self.save_state_button = tk.Button(self.wo_frame, text="Save Project", command=self.save_state,
                                            font=("Arial", 10, "bold"), bg=self.colors['light_blue'], fg="white",
                                            relief="flat", cursor="hand2")
         self.save_state_button.pack(side="left", padx=(0, 10))
@@ -204,10 +250,15 @@ class BidWriterApp:
                                          fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
         self.clear_button.pack(side="left", padx=(0, 10))
         
-        self.save_docs_button = tk.Button(self.buttons_container, text="Save to Docs", command=self.save_to_docs,
+        self.docs1_button = tk.Button(self.buttons_container, text="Docs1", command=self.save_to_docs1,
                                          font=("Arial", 12, "bold"), bg=self.colors['primary_blue'], 
-                                         fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
-        self.save_docs_button.pack(side="left", padx=(0, 10))
+                                         fg="white", height=1, width=12, relief="solid", bd=1, cursor="hand2")
+        self.docs1_button.pack(side="left", padx=(0, 10))
+        
+        self.docs2_button = tk.Button(self.buttons_container, text="Docs2", command=self.save_to_docs2,
+                                         font=("Arial", 12, "bold"), bg=self.colors['primary_blue'], 
+                                         fg="white", height=1, width=12, relief="solid", bd=1, cursor="hand2")
+        self.docs2_button.pack(side="left", padx=(0, 10))
 
         self.output_frame = tk.Frame(self.root, bg=self.colors['gray_light'], relief="solid", bd=1)
         self.output_frame.pack(padx=20, pady=(0, 10), fill='both', expand=False)
@@ -219,6 +270,14 @@ class BidWriterApp:
                                          font=("Arial", 11, "bold"), bg=self.colors['gray_light'],
                                          fg=self.colors['gray_dark'], anchor="w")
         self.bid_count_label.pack(side="left", padx=(8, 0))
+        
+        # Add icon button to open bids in full page view
+        self.view_full_page_button = tk.Button(self.output_header_frame, text="⛶",
+                                               font=("Arial", 14), bg=self.colors['light_blue'],
+                                               fg="white", relief="flat", cursor="hand2",
+                                               activebackground=self.colors['primary_blue'],
+                                               command=self.open_full_page_view, width=3, height=1)
+        self.view_full_page_button.pack(side="left", padx=(10, 0))
         
         self.output_scrollbar = tk.Scrollbar(self.output_frame)
         self.output_scrollbar.pack(side="right", fill="y")
@@ -247,10 +306,43 @@ class BidWriterApp:
 
         self.on_save_callback = on_save_callback
 
-        self.load_bids_from_url(self.bid_data_url)
+        # Load bids asynchronously to prevent blocking UI
+        self.load_bids_from_url_async(self.bid_data_url)
         if wo_number_to_load:
-            self.wo_entry.insert(0, wo_number_to_load)
-            self.load_state()
+            # If loading existing bid, try to load all project fields from database (from any user)
+            if self.db:
+                try:
+                    bid_data = self.db.load_bid(wo_number_to_load, self.user_id, all_users=True)
+                    if bid_data:
+                        # Load property_address
+                        if bid_data.get('property_address'):
+                            self.property_address = bid_data['property_address']
+                            self.address_entry.config(state='normal')
+                            self.address_entry.delete(0, tk.END)
+                            self.address_entry.insert(0, self.property_address)
+                            self.address_entry.config(state='readonly')
+                        
+                        # Load client_code
+                        if bid_data.get('client_code') and hasattr(self, 'client_code_entry'):
+                            self.client_code_entry.config(state='normal')
+                            self.client_code_entry.delete(0, tk.END)
+                            self.client_code_entry.insert(0, bid_data['client_code'])
+                            self.client_code_entry.config(state='readonly')
+                        
+                        # Load wo_type
+                        if bid_data.get('wo_type') and hasattr(self, 'wo_type_entry'):
+                            self.wo_type_entry.config(state='normal')
+                            self.wo_type_entry.delete(0, tk.END)
+                            self.wo_type_entry.insert(0, bid_data['wo_type'])
+                            self.wo_type_entry.config(state='readonly')
+                        
+                        # Load the bid state (selected items, photos, etc.)
+                        self.load_state()
+                except Exception as e:
+                    print(f"Could not load project data: {e}")
+                    # Still try to load state if possible
+                    if wo_number_to_load:
+                        self.load_state()
 
         self.root.after(300000, self.auto_save)
 
@@ -503,10 +595,10 @@ class BidWriterApp:
         # Update buttons
         self.refresh_button.configure(bg=self.colors['light_blue'], fg=self.colors['button_text'], 
                                      activebackground=self.colors['primary_blue'])
-        self.load_state_button.configure(bg=self.colors['light_blue'], fg=self.colors['button_text'])
         self.save_state_button.configure(bg=self.colors['light_blue'], fg=self.colors['button_text'])
         self.generate_button.configure(bg=self.colors['green'], fg=self.colors['button_text'])
-        self.save_docs_button.configure(bg=self.colors['primary_blue'], fg=self.colors['button_text'])
+        self.docs1_button.configure(bg=self.colors['primary_blue'], fg=self.colors['button_text'])
+        self.docs2_button.configure(bg=self.colors['primary_blue'], fg=self.colors['button_text'])
         
         # Update text widgets
         self.output_text.configure(bg=self.colors['white'], fg=self.colors['text_primary'])
@@ -561,7 +653,15 @@ class BidWriterApp:
         
         self.active_category_button = None
         
-        for category in self.all_items:
+        # Get list of categories
+        categories = list(self.all_items.keys())
+        total_categories = len(categories)
+        
+        # Calculate buttons per row (half rounded up)
+        buttons_per_row = (total_categories + 1) // 2
+        
+        # Create buttons and arrange them in 2 rows using grid
+        for idx, category in enumerate(categories):
             bg_color = self.colors['light_blue']
 
             btn = tk.Button(self.category_frame, text=category, width=20, height=2, 
@@ -573,7 +673,15 @@ class BidWriterApp:
             btn.bind("<Enter>", lambda e, b=btn: self.on_hover(b))
             btn.bind("<Leave>", lambda e, b=btn: self.on_leave_button(b))
             
-            btn.pack(side="left", padx=5)
+            # Calculate row and column positions
+            row = idx // buttons_per_row
+            col = idx % buttons_per_row
+            
+            btn.grid(row=row, column=col, padx=5, pady=5, sticky="ew")
+        
+        # Configure grid columns to have equal weight
+        for col in range(buttons_per_row):
+            self.category_frame.grid_columnconfigure(col, weight=1, uniform="category_buttons")
 
     def on_hover(self, button):
         """Change button color on hover, unless it's the active button."""
@@ -610,8 +718,93 @@ class BidWriterApp:
         self.load_bids_from_url(self.bid_data_url)
         messagebox.showinfo("Refresh Complete", "Bid list has been refreshed successfully.")
 
+    def load_bids_from_url_async(self, url):
+        """Loads bid data asynchronously to prevent blocking UI."""
+        # Initialize empty categories first
+        self.categories = {}
+        self.all_items = {}
+        
+        # Show loading indicator
+        loading_label = tk.Label(self.category_frame, text="Loading bids...", 
+                                font=("Arial", 11), bg=self.colors['background'],
+                                fg=self.colors['gray_dark'])
+        loading_label.pack(side="left", padx=5)
+        
+        def load_in_thread():
+            try:
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                
+                csv_data = io.StringIO(response.text)
+                reader = csv.DictReader(csv_data)
+                
+                categories = {}
+                for row in reader:
+                    if 'Category' in row and 'Item' in row and 'Template' in row:
+                        category = row['Category']
+                        item_name = row['Item']
+                        template = row['Template']
+                        unit_price = row.get('Unit Price', '0.00')
+                        
+                        if category not in categories:
+                            categories[category] = []
+                        categories[category].append({'item_name': item_name, 'template': template, 'unit_price': unit_price})
+                
+                all_items = categories.copy()
+                
+                # Update UI in main thread
+                def update_ui():
+                    loading_label.destroy()
+                    self.categories = categories
+                    self.all_items = all_items
+                    self.update_bid_buttons()
+                    if self.categories:
+                        self.active_category = list(self.categories.keys())[0]
+                        if self.category_frame.winfo_children():
+                            first_button = self.category_frame.winfo_children()[0]
+                            self.load_items_with_highlight(self.active_category, first_button)
+                
+                self.root.after(0, update_ui)
+                
+            except requests.exceptions.RequestException as e:
+                def show_error():
+                    try:
+                        if loading_label.winfo_exists():
+                            loading_label.destroy()
+                        messagebox.showwarning("Network Error", f"Could not connect to the online file. Using default bids.\nError: {e}")
+                        self.load_default_bids()
+                        self.update_bid_buttons()
+                        if self.categories:
+                            self.active_category = list(self.categories.keys())[0]
+                            if self.category_frame.winfo_children():
+                                first_button = self.category_frame.winfo_children()[0]
+                                self.load_items_with_highlight(self.active_category, first_button)
+                    except Exception as err:
+                        print(f"Error in error handler: {err}")
+                self.root.after(0, show_error)
+            except Exception as e:
+                def show_error():
+                    try:
+                        if loading_label.winfo_exists():
+                            loading_label.destroy()
+                        messagebox.showwarning("Error", f"Failed to read data from online file. Using default bids.\nError: {e}")
+                        self.load_default_bids()
+                        self.update_bid_buttons()
+                        if self.categories:
+                            self.active_category = list(self.categories.keys())[0]
+                            if self.category_frame.winfo_children():
+                                first_button = self.category_frame.winfo_children()[0]
+                                self.load_items_with_highlight(self.active_category, first_button)
+                    except Exception as err:
+                        print(f"Error in error handler: {err}")
+                self.root.after(0, show_error)
+        
+        # Start loading in background thread
+        thread = threading.Thread(target=load_in_thread, daemon=True)
+        thread.start()
+    
     def load_bids_from_url(self, url):
-        """Loads bid data from a public CSV file URL."""
+        """Loads bid data from a public CSV file URL (synchronous version for refresh)."""
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -981,7 +1174,7 @@ class BidWriterApp:
         self.root.after(50, _perform_scroll_reset)
         
     def save_state(self, silent=False):
-        """Saves the current state of selected bids and photos to a JSON file."""
+        """Saves the current state to Supabase (or local JSON file as fallback)."""
         wo_number = self.wo_entry.get().strip()
         if not wo_number:
             if not silent:
@@ -1008,25 +1201,124 @@ class BidWriterApp:
                     "conjunction_key": item_data["conjunction_key"].get()
                 }
         
-        for photo_key, photo_data in self.item_photos.items():
-            if photo_data and 'path' in photo_data and photo_data['path']:
-                state["item_photos"][photo_key] = photo_data['path']
+        # Save photo data - preserve the full dictionary structure (path, original image, etc.)
+        # But for saving to database, we only need the path (the upload function will handle the rest)
+        print(f"\n[save_state] Saving photos. self.item_photos has {len(self.item_photos)} entries")
+        print(f"[save_state] Photo keys: {list(self.item_photos.keys())}")
         
-        state_file_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
-        try:
-            with open(state_file_path, 'w') as f:
-                json.dump(state, f, indent=4)
-        except Exception as e:
-            if not silent:
-                messagebox.showerror("Error", f"Failed to save state: {e}")
-            return
-
-        # Notify user (only when not silent)
-        if not silent:
+        for photo_key, photo_data in self.item_photos.items():
+            print(f"[save_state] Processing photo_key: {photo_key}, type: {type(photo_data)}")
+            if photo_data:
+                # Store the full photo_data dict if it exists, or just the path if it's a string
+                if isinstance(photo_data, dict):
+                    print(f"  photo_data dict keys: {list(photo_data.keys())}")
+                    # Debug: print the actual path value
+                    path_value = photo_data.get('path', None)
+                    print(f"  path value: {repr(path_value)} (type: {type(path_value)})")
+                    
+                    # Keep the path and any other metadata, but not the PIL Image object (it's not JSON serializable)
+                    photo_dict = {}
+                    
+                    # Check if path exists and is not empty
+                    if 'path' in photo_data:
+                        path_value = photo_data['path']
+                        if path_value and str(path_value).strip():  # Check if path is not None and not empty
+                            photo_dict['path'] = str(path_value).strip()
+                            print(f"  ✅ Found valid path: {photo_dict['path']}")
+                        else:
+                            print(f"  ⚠️ Path exists but is empty/None: {repr(path_value)}")
+                    
+                    if 'url' in photo_data and photo_data.get('url'):
+                        photo_dict['url'] = photo_data['url']
+                        print(f"  ✅ Found URL: {photo_data['url']}")
+                    if 'storage_path' in photo_data and photo_data.get('storage_path'):
+                        photo_dict['storage_path'] = photo_data['storage_path']
+                        print(f"  ✅ Found storage_path: {photo_data['storage_path']}")
+                    if 'original_path' in photo_data and photo_data.get('original_path'):
+                        photo_dict['original_path'] = photo_data['original_path']
+                        print(f"  ✅ Found original_path: {photo_data['original_path']}")
+                    
+                    if photo_dict:  # Only add if we have at least the path
+                        state["item_photos"][photo_key] = photo_dict
+                        print(f"  ✅ Added to state: {photo_key} -> {photo_dict}")
+                    else:
+                        print(f"  ⚠️ No valid path/URL/storage_path found, skipping")
+                        # Even if path is empty, try to preserve the dict structure for debugging
+                        print(f"  📋 Full photo_data: {photo_data}")
+                elif isinstance(photo_data, str):
+                    # If it's just a string (path), wrap it in a dict
+                    state["item_photos"][photo_key] = {'path': photo_data}
+                    print(f"  ✅ String path converted: {photo_data}")
+                else:
+                    print(f"  ⚠️ Unknown photo_data type: {type(photo_data)}")
+            else:
+                print(f"  ⚠️ photo_data is empty/None for {photo_key}")
+        
+        print(f"[save_state] Final state['item_photos'] has {len(state['item_photos'])} entries: {list(state['item_photos'].keys())}")
+        
+        # Get property address from entry field
+        property_address = self.address_entry.get().strip() if hasattr(self, 'address_entry') else self.property_address or ""
+        
+        # Get username - ensure it's always available
+        username = self.username if hasattr(self, 'username') and self.username else None
+        if not username and self.db and self.user_id:
+            # Try to get username from database if not stored
             try:
-                messagebox.showinfo("Success", f"State saved successfully to:\n{os.path.basename(state_file_path)}")
-            except Exception:
-                pass
+                user = self.db.get_user_by_id(self.user_id)
+                if user:
+                    username = user.get('username')
+            except Exception as e:
+                print(f"Could not fetch username: {e}")
+        
+        # Try to save to Supabase first
+        if self.db and self.user_id:
+            try:
+                # Get client_code and wo_type from entry fields if they exist
+                client_code = None
+                wo_type = None
+                if hasattr(self, 'client_code_entry'):
+                    client_code = self.client_code_entry.get().strip() or None
+                if hasattr(self, 'wo_type_entry'):
+                    wo_type = self.wo_type_entry.get().strip() or None
+                
+                # Save to database with all project fields and username
+                self.db.save_bid(wo_number, self.user_id, state["selected_items"], state["item_photos"], 
+                               property_address, username, client_code, wo_type)
+                # Update stored property_address
+                self.property_address = property_address
+                if not silent:
+                    try:
+                        messagebox.showinfo("Success", f"Project saved successfully to cloud!")
+                    except Exception:
+                        pass
+                # Fire callback and return - don't save locally if DB save succeeded
+                self._safe_post_save_callback()
+                return
+            except Exception as e:
+                if not silent:
+                    messagebox.showerror("Error", f"Failed to save to database: {e}\nTrying local backup...")
+                # Fall through to local save
+                print(f"Database save failed: {e}")
+                # Don't disable DB - keep trying
+        
+        # Fallback to local JSON file (or if DB not available)
+        if not self.db or not self.user_id:
+            state_file_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
+            # Include property_address in local save if available
+            if property_address:
+                state["property_address"] = property_address
+            try:
+                with open(state_file_path, 'w') as f:
+                    json.dump(state, f, indent=4)
+                if not silent:
+                    try:
+                        messagebox.showinfo("Success", f"State saved locally to:\n{os.path.basename(state_file_path)}")
+                    except Exception:
+                        pass
+            except Exception as e:
+                if not silent:
+                    messagebox.showerror("Error", f"Failed to save state: {e}")
+                return
 
         # Fire post-save callback safely (if dashboard is in a state to handle it)
         if callable(self.on_save_callback):
@@ -1045,20 +1337,57 @@ class BidWriterApp:
             pass
 
     def load_state(self):
-        """Loads a saved state from a JSON file and populates the UI."""
+        """Loads a saved state from Supabase (or local JSON file as fallback) and populates the UI."""
         wo_number = self.wo_entry.get().strip()
         if not wo_number:
             messagebox.showwarning("Warning", "Please enter a Work Order Number to load the state.")
             return
         
-        state_file_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
-        if not os.path.exists(state_file_path):
-            messagebox.showerror("Error", f"No saved state found for WO '{wo_number}'.")
-            return
+        state = None
+        
+        # Try to load from Supabase first - can load from any user
+        if self.db:
+            try:
+                bid_data = self.db.load_bid(wo_number, self.user_id, all_users=True)
+                if bid_data:
+                    state = {
+                        "selected_items": bid_data.get("selected_items", {}),
+                        "item_photos": bid_data.get("item_photos", {})
+                    }
+                    # Load property address if available
+                    if bid_data.get('property_address') and hasattr(self, 'address_entry'):
+                        self.property_address = bid_data['property_address']
+                        self.address_entry.delete(0, tk.END)
+                        self.address_entry.insert(0, self.property_address)
+                    
+                    # Load client_code if available
+                    if bid_data.get('client_code') and hasattr(self, 'client_code_entry'):
+                        self.client_code_entry.delete(0, tk.END)
+                        self.client_code_entry.insert(0, bid_data['client_code'])
+                    
+                    # Load wo_type if available
+                    if bid_data.get('wo_type') and hasattr(self, 'wo_type_entry'):
+                        self.wo_type_entry.delete(0, tk.END)
+                        self.wo_type_entry.insert(0, bid_data['wo_type'])
+            except Exception as e:
+                print(f"Error loading from database: {e}")
+                # Fall through to local load
+        
+        # Fallback to local JSON file
+        if not state:
+            state_file_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
+            if os.path.exists(state_file_path):
+                try:
+                    with open(state_file_path, 'r') as f:
+                        state = json.load(f)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to load state: {e}")
+                    return
+            else:
+                messagebox.showerror("Error", f"No saved state found for WO '{wo_number}'.")
+                return
         
         try:
-            with open(state_file_path, 'r') as f:
-                state = json.load(f)
             
             self.selected_items = {}
             self.item_photos = {}
@@ -1083,16 +1412,31 @@ class BidWriterApp:
                     item_data["conjunction_key"] = tk.StringVar(value=item_data.get("conjunction_key", ""))
                     self.selected_items[category][item_key] = item_data
             
-            for photo_key, photo_path in state.get("item_photos", {}).items():
-                if os.path.exists(photo_path) and Image:
-                    image = Image.open(photo_path)
-                    self.item_photos[photo_key] = {'original': image, 'path': photo_path}
+            # Load photos from saved state
+            for photo_key, photo_data in state.get("item_photos", {}).items():
+                # Handle both dict format (new) and string path format (old)
+                if isinstance(photo_data, dict):
+                    photo_path = photo_data.get('path') or photo_data.get('original_path') or photo_data.get('url')
+                else:
+                    photo_path = photo_data  # Old format: just a string path
+                
+                if photo_path and os.path.exists(str(photo_path)) and Image:
+                    try:
+                        image = Image.open(photo_path)
+                        self.item_photos[photo_key] = {'original': image, 'path': str(photo_path)}
+                    except Exception as e:
+                        print(f"Error loading photo {photo_key} from {photo_path}: {e}")
+                elif photo_path and Image:
+                    # Path might be a URL or storage path
+                    print(f"Photo path exists but file not found: {photo_path}")
+                    # Store the reference anyway for later download
+                    self.item_photos[photo_key] = {'path': str(photo_path)}
             
             self.update_bid_buttons()
             if self.active_category:
                 self.load_items(self.active_category)
             
-            messagebox.showinfo("Success", f"State for WO '{wo_number}' loaded successfully.")
+            # State loaded silently - no dialog box
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load state: {e}")
@@ -1121,19 +1465,31 @@ class BidWriterApp:
         if Image is None:
             messagebox.showerror("Error", "PIL/Pillow is required for photo support. Install with: pip install pillow")
             return
+        
+        if not file_path or not file_path.strip():
+            print(f"[load_photo] ⚠️ Empty file_path provided for {category}_{item_key}")
+            return
             
         try:
+            # Normalize the path and ensure it exists
+            file_path = os.path.normpath(file_path.strip())
+            if not os.path.exists(file_path):
+                messagebox.showerror("Error", f"Photo file not found:\n{file_path}")
+                return
+            
             image = Image.open(file_path)
             
             photo_key = f"{category}_{item_key}"
             self.item_photos[photo_key] = {
                 'original': image,
-                'path': file_path
+                'path': file_path  # Store the normalized, validated path
             }
             
+            print(f"[load_photo] ✅ Loaded photo: {photo_key} from {file_path}")
             self.load_photo_display(category, item_key)
                 
         except Exception as e:
+            print(f"[load_photo] ❌ Error loading photo: {e}")
             messagebox.showerror("Error", f"Failed to load image:\n{str(e)}")
             
     def load_photo_display(self, category, item_key):
@@ -1185,10 +1541,27 @@ class BidWriterApp:
             image = ImageGrab.grabclipboard()
             
             if image and isinstance(image, Image.Image):
+                # Save pasted image to a temporary file so we have a path
                 photo_key = f"{category}_{item_key}"
+                
+                # Create a temporary file for the pasted image
+                temp_dir = os.path.join(self.app_data_dir, "temp_photos")
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                # Create a unique filename (sanitize photo_key for filename)
+                import time
+                safe_key = photo_key.replace(' ', '_').replace('/', '_').replace('\\', '_')
+                temp_filename = f"pasted_{safe_key}_{int(time.time())}.png"
+                temp_path = os.path.join(temp_dir, temp_filename)
+                
+                # Save the image
+                image.save(temp_path, 'PNG')
+                
+                print(f"[handle_paste] ✅ Saved pasted image to: {temp_path}")
+                
                 self.item_photos[photo_key] = {
                     'original': image,
-                    'path': None
+                    'path': temp_path  # Now we have a valid path!
                 }
                 
                 self.load_photo_display(category, item_key)
@@ -1432,7 +1805,9 @@ class BidWriterApp:
         
         self.output_text.config(state=tk.DISABLED)
     
-    def save_to_docs(self):
+    def save_to_docs1(self):
+        """Save to Docs1 format: Table with SL No., Bids, and Photos columns"""
+        # This is the original format - table layout
         bid_count = 0
         final_bids = []
         bid_photos = []
@@ -1511,25 +1886,114 @@ class BidWriterApp:
         if use_docx:
             doc = Document()
             
-            wo_number = self.wo_entry.get().strip()
-            if wo_number:
+            # Get project information
+            project_info = self._get_project_info()
+            
+            # Title
+            wo_number = project_info['wo_number']
+            if wo_number != "N/A":
                 doc.add_heading(f"Techvengers Bid Proposal - WO# {wo_number}", 0)
             else:
                 doc.add_heading('Techvengers Bid Proposal', 0)
             
             doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            
-            date_paragraph = doc.add_paragraph(f'Date: {datetime.now().strftime("%B %d, %Y")}')
-            date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             doc.add_paragraph()
             
-            table = doc.add_table(rows=1, cols=3)
+            # Project Information Section
+            info_table = doc.add_table(rows=4, cols=2)
+            info_table.style = 'Table Grid'
+            info_table.columns[0].width = Inches(2.0)
+            info_table.columns[1].width = Inches(5.0)
+            
+            # Row 1: Work Order
+            info_table.rows[0].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[0].cells[0].paragraphs[0].add_run("Work Order (WO):")
+            run1.bold = True
+            info_table.rows[0].cells[1].text = project_info['wo_number']
+            
+            # Row 2: Property Address
+            info_table.rows[1].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[1].cells[0].paragraphs[0].add_run("Property Address:")
+            run1.bold = True
+            info_table.rows[1].cells[1].text = project_info['property_address']
+            
+            # Row 3: Work Order Type
+            info_table.rows[2].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[2].cells[0].paragraphs[0].add_run("Work Order Type:")
+            run1.bold = True
+            info_table.rows[2].cells[1].text = project_info['wo_type']
+            
+            # Row 4: Client Code
+            info_table.rows[3].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[3].cells[0].paragraphs[0].add_run("Client Code:")
+            run1.bold = True
+            info_table.rows[3].cells[1].text = project_info['client_code']
+            
+            doc.add_paragraph()
+            
+            # Dates and Processor Name Section
+            dates_table = doc.add_table(rows=3, cols=2)
+            dates_table.style = 'Table Grid'
+            dates_table.columns[0].width = Inches(2.0)
+            dates_table.columns[1].width = Inches(5.0)
+            
+            # Row 1: Project Creation Date
+            dates_table.rows[0].cells[0].paragraphs[0].clear()
+            run1 = dates_table.rows[0].cells[0].paragraphs[0].add_run("Project Creation Date:")
+            run1.bold = True
+            dates_table.rows[0].cells[1].text = project_info['created_at']
+            
+            # Row 2: Project Last Modification Date
+            dates_table.rows[1].cells[0].paragraphs[0].clear()
+            run1 = dates_table.rows[1].cells[0].paragraphs[0].add_run("Project Last Modification Date:")
+            run1.bold = True
+            dates_table.rows[1].cells[1].text = project_info['updated_at']
+            
+            # Row 3: Processor Name
+            dates_table.rows[2].cells[0].paragraphs[0].clear()
+            run1 = dates_table.rows[2].cells[0].paragraphs[0].add_run("Processor Name:")
+            run1.bold = True
+            processor_name = self.username if hasattr(self, 'username') and self.username else "N/A"
+            dates_table.rows[2].cells[1].text = processor_name
+            
+            doc.add_paragraph()
+            
+            # Summary Section
+            total_items = len(all_selected_items)
+            
+            # Count occurrences of each item name
+            item_count_dict = {}
+            for item in all_selected_items:
+                item_name = item.get('original_name', 'Unknown Item')
+                item_count_dict[item_name] = item_count_dict.get(item_name, 0) + 1
+            
+            # Create list with counts
+            selected_items_with_counts = []
+            for item_name, count in sorted(item_count_dict.items()):
+                if count > 1:
+                    selected_items_with_counts.append(f"{item_name} ({count})")
+                else:
+                    selected_items_with_counts.append(item_name)
+            
+            summary_para1 = doc.add_paragraph()
+            summary_para1.add_run("Summary: ").bold = True
+            summary_para1.add_run(f"Total Bid Count: {total_items}")
+            
+            summary_para2 = doc.add_paragraph()
+            summary_para2.add_run("Items Selected:").bold = True
+            for item_with_count in selected_items_with_counts:
+                summary_para2.add_run(f"\n• {item_with_count}")
+            
+            doc.add_paragraph()
+            
+            table = doc.add_table(rows=1, cols=4)
             table.style = 'Table Grid'
             table.autofit = False
             
-            table.columns[0].width = Inches(0.5)
-            table.columns[1].width = Inches(3.5)
-            table.columns[2].width = Inches(2.0)
+            table.columns[0].width = Inches(0.5)   # No.
+            table.columns[1].width = Inches(4.0)   # Description
+            table.columns[2].width = Inches(1.2)   # Total Price
+            table.columns[3].width = Inches(2.0)   # Photo
             
             hdr_cells = table.rows[0].cells
             
@@ -1537,36 +2001,63 @@ class BidWriterApp:
             set_cell_background(hdr_cells[0], header_color_hex)
             set_cell_background(hdr_cells[1], header_color_hex)
             set_cell_background(hdr_cells[2], header_color_hex)
+            set_cell_background(hdr_cells[3], header_color_hex)
 
-            for cell, text in zip(hdr_cells, ['SL No.', 'Bids', 'Photos']):
+            for cell, text in zip(hdr_cells, ['No.', 'Description', 'Total Price', 'Photo']):
                 cell.text = text
                 for paragraph in cell.paragraphs:
                     for run in paragraph.runs:
                         run.font.color.rgb = RGBColor(255, 255, 255)
                         run.font.bold = True
             
-            for bid_text, photo_data in zip(final_bids, bid_photos):
-                row_cells = table.add_row().cells
-                match = re.match(r"(\d+)\. ", bid_text)
-                if match:
-                    row_cells[0].text = match.group(1)
-                    row_cells[1].text = bid_text[len(match.group(0)):]
+            # Create list of items with prices for easier processing
+            items_with_prices = []
+            for i, (bid_text, photo_data) in enumerate(zip(final_bids, bid_photos)):
+                # Get the corresponding item to calculate price
+                if i < len(all_selected_items):
+                    item = all_selected_items[i]
+                    total_price = self._calculate_item_price(item)
                 else:
-                    row_cells[0].text = ""
-                    row_cells[1].text = bid_text
+                    total_price = 0.0
                 
-                if photo_data and photo_data['original']:
+                # Extract bid text without price and remove number prefix
+                # First remove the number prefix like "1. " or "2. "
+                bid_text_clean = re.sub(r'^\d+\.\s*', '', bid_text)
+                # Then remove price line if it exists
+                bid_text_clean = self._extract_bid_text_without_price(bid_text_clean)
+                if not bid_text_clean:
+                    # If extraction failed, try to remove just the price line from original
+                    bid_text_clean = re.sub(r'\nPrice.*?\$.*?\n?', '\n', bid_text)
+                    bid_text_clean = re.sub(r'^\d+\.\s*', '', bid_text_clean)
+                    bid_text_clean = bid_text_clean.strip()
+                    if not bid_text_clean:
+                        bid_text_clean = re.sub(r'^\d+\.\s*', '', bid_text)
+                
+                items_with_prices.append({
+                    'number': i + 1,
+                    'description': bid_text_clean.strip(),
+                    'price': total_price,
+                    'photo': photo_data
+                })
+            
+            for item_data in items_with_prices:
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(item_data['number'])
+                row_cells[1].text = item_data['description']
+                row_cells[2].text = f"${item_data['price']:.2f}"
+                
+                if item_data['photo'] and item_data['photo'].get('original'):
                     try:
                         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
                             temp_path = temp_file.name
-                            photo_data['original'].save(temp_path)
+                            item_data['photo']['original'].save(temp_path)
                         
-                        row_cells[2].paragraphs[0].add_run().add_picture(temp_path, width=Inches(1.5))
+                        row_cells[3].paragraphs[0].add_run().add_picture(temp_path, width=Inches(1.5))
                         
                         os.remove(temp_path)
                     except Exception as e:
                         print(f"Error adding image: {e}")
-                        row_cells[2].text = "Error loading image"
+                        row_cells[3].text = "Error loading image"
             
             doc.add_paragraph()
             footer = doc.add_paragraph('Generated by Techvengers Bid Writer')
@@ -1574,14 +2065,16 @@ class BidWriterApp:
             footer_run = footer.runs[0]
             footer_run.italic = True
             
-            current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_filename = f"Techvengers_Bids_{current_time}.docx"
+            # Generate filename: Bids_{WO}_{date}
+            wo_number_for_file = project_info['wo_number'].replace(" ", "_") if project_info['wo_number'] != "N/A" else "N/A"
+            date_str = datetime.now().strftime("%d%b")  # Format: 25Dec
+            default_filename = f"Bids_{wo_number_for_file}_{date_str}.docx"
             
             file_path = filedialog.asksaveasfilename(
                 defaultextension=".docx",
                 filetypes=[("Word Document", "*.docx"), ("All Files", "*.*")],
                 initialfile=default_filename,
-                title="Save Bids Document"
+                title="Save Bids Document (Docs1 Format)"
             )
             
             if file_path:
@@ -1600,8 +2093,12 @@ class BidWriterApp:
                         messagebox.showinfo("File Saved", f"Document saved successfully!\nLocation: {file_path}")
         
         else:
-            current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-            default_filename = f"Techvengers_Bids_{current_time}.txt"
+            # Fallback to text file for Docs1
+            # Generate filename: Bids_{WO}_{date}
+            project_info = self._get_project_info()
+            wo_number_for_file = project_info['wo_number'].replace(" ", "_") if project_info['wo_number'] != "N/A" else "N/A"
+            date_str = datetime.now().strftime("%d%b")  # Format: 25Dec
+            default_filename = f"Bids_{wo_number_for_file}_{date_str}.txt"
             
             file_path = filedialog.asksaveasfilename(
                 defaultextension=".txt",
@@ -1622,6 +2119,367 @@ class BidWriterApp:
                             file.write("[Photo attached - see Word version for images]\n")
                         file.write("\n")
                         if bid_text != final_bids[-1]:
+                            file.write("─" * 50 + "\n\n")
+                    
+                    file.write("\nGenerated by Techvengers Bid Writer\n")
+                
+                messagebox.showinfo("Success", f"Bids saved successfully to:\n{file_path}")
+                
+                if messagebox.askyesno("Open File", "Would you like to open the saved document?"):
+                    try:
+                        if os.name == 'nt':
+                            os.startfile(file_path)
+                        elif sys.platform == 'darwin':
+                            os.system(f'open "{file_path}"')
+                        else:
+                            os.system(f'xdg-open "{file_path}"')
+                    except Exception as e:
+                        messagebox.showinfo("File Saved", f"Document saved successfully!\nLocation: {file_path}")
+    
+    def _calculate_item_price(self, item):
+        """Calculate the total price for an item"""
+        try:
+            qty_str = item["qty"].get().strip().replace(",", "")
+            unit_price_str = item["unit_price"].get().strip().replace(",", "")
+            qty = float(qty_str) if qty_str else 0.0
+            unit_price = float(unit_price_str) if unit_price_str else 0.0
+            total_price = round(qty * unit_price, 2)
+            return total_price
+        except (ValueError, TypeError):
+            return 0.0
+    
+    def _format_date(self, date_str):
+        """Format date string to readable format"""
+        if not date_str:
+            return "N/A"
+        try:
+            # Handle ISO format: 2024-01-01T12:00:00+00:00 or 2024-01-01
+            if 'T' in date_str:
+                date_part = date_str.split('T')[0]
+            else:
+                date_part = date_str[:10]
+            dt = datetime.strptime(date_part, '%Y-%m-%d')
+            return dt.strftime('%B %d, %Y')
+        except Exception:
+            return date_str[:10] if len(date_str) >= 10 else date_str
+    
+    def _get_project_info(self):
+        """Get project information including dates from database"""
+        wo_number = self.wo_entry.get().strip() if hasattr(self, 'wo_entry') else ""
+        property_address = self.address_entry.get().strip() if hasattr(self, 'address_entry') else self.property_address or ""
+        client_code = self.client_code_entry.get().strip() if hasattr(self, 'client_code_entry') else ""
+        wo_type = self.wo_type_entry.get().strip() if hasattr(self, 'wo_type_entry') else ""
+        
+        created_at = None
+        updated_at = None
+        
+        # Try to get dates from database
+        if self.db and self.user_id and wo_number:
+            try:
+                bid_data = self.db.load_bid(wo_number, self.user_id, all_users=True)
+                if bid_data:
+                    created_at = bid_data.get('created_at')
+                    updated_at = bid_data.get('updated_at')
+            except Exception as e:
+                print(f"Error getting dates from database: {e}")
+        
+        return {
+            'wo_number': wo_number or "N/A",
+            'property_address': property_address or "N/A",
+            'client_code': client_code or "N/A",
+            'wo_type': wo_type or "N/A",
+            'created_at': self._format_date(created_at),
+            'updated_at': self._format_date(updated_at)
+        }
+    
+    def _extract_bid_text_without_price(self, bid_text):
+        """Extract bid text without the price line"""
+        # Remove lines that contain "Price:" or "Price $"
+        lines = bid_text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            if not (line.strip().startswith('Price:') or line.strip().startswith('Price $')):
+                cleaned_lines.append(line)
+        return '\n'.join(cleaned_lines).strip()
+    
+    def save_to_docs2(self):
+        """Save to Docs2 format: Bid text -> Price below -> Photo below (vertical layout)"""
+        bid_count = 0
+        bid_items = []  # List of dicts with bid_text, price, photo_data
+
+        # Count selected items across all categories for verification
+        total_selected = 0
+        selected_by_category = {}
+        for category, cat_items in self.selected_items.items():
+            selected_count = sum(1 for item in cat_items.values() if item["selected"])
+            if selected_count > 0:
+                selected_by_category[category] = selected_count
+                total_selected += selected_count
+
+        conjunction_groups = {}
+        standalone_bids = []
+        for category, category_items in self.selected_items.items():
+            for item in category_items.values():
+                if item["selected"]:
+                    conjunction_key = item["conjunction_key"].get().strip().upper()
+                    if conjunction_key:
+                        if conjunction_key not in conjunction_groups:
+                            conjunction_groups[conjunction_key] = []
+                        conjunction_groups[conjunction_key].append(item)
+                    else:
+                        standalone_bids.append(item)
+        
+        for key in conjunction_groups:
+            conjunction_groups[key].sort(key=lambda x: x['instance_info']['key'])
+        
+        all_selected_items = []
+        for key in sorted(conjunction_groups.keys()):
+            all_selected_items.extend(conjunction_groups[key])
+        all_selected_items.extend(sorted(standalone_bids, key=lambda x: x['instance_info']['key']))
+
+        if not all_selected_items:
+            messagebox.showwarning("No Bids Selected", "Please select some bids before saving to document!")
+            return
+        
+        # Show summary of what will be saved if items from multiple categories
+        if len(selected_by_category) > 1:
+            category_summary = "\n".join([f"• {cat}: {count} item(s)" for cat, count in selected_by_category.items()])
+            result = messagebox.askyesno("Multi-Category Document", 
+                f"You are about to save bids from multiple categories:\n\n{category_summary}\n\nTotal: {total_selected} items\n\nContinue?")
+            if not result:
+                return
+
+        for i, item in enumerate(all_selected_items, 1):
+            bid_count += 1
+            
+            # Get bid text and remove price line if it exists
+            bid_text, _ = self._get_item_bid_data(item)
+            bid_text_without_price = self._extract_bid_text_without_price(bid_text)
+            if not bid_text_without_price:
+                bid_text_without_price = bid_text  # Fallback to original if extraction fails
+            
+            # Calculate price
+            total_price = self._calculate_item_price(item)
+            
+            # Get photo
+            instance_key = item['instance_info']['key']
+            category_name = next(cat for cat, items in self.selected_items.items() if instance_key in items)
+            photo_key = f"{category_name}_{instance_key}"
+            photo_data = None
+            if photo_key in self.item_photos and self.item_photos[photo_key]:
+                photo_data = self.item_photos[photo_key]
+            
+            bid_items.append({
+                'number': bid_count,
+                'text': bid_text_without_price,
+                'price': total_price,
+                'photo': photo_data
+            })
+
+        try:
+            from docx import Document
+            from docx.shared import Inches, Cm
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import RGBColor
+            use_docx = True
+        except ImportError:
+            use_docx = False
+            messagebox.showinfo("Info", "python-docx not found. Saving as text file instead.\nTo save as Word document, install: pip install python-docx")
+
+        if use_docx:
+            doc = Document()
+            
+            # Get project information
+            project_info = self._get_project_info()
+            
+            # Title
+            wo_number = project_info['wo_number']
+            if wo_number != "N/A":
+                doc.add_heading(f"Techvengers Bid Proposal - WO# {wo_number}", 0)
+            else:
+                doc.add_heading('Techvengers Bid Proposal', 0)
+            
+            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            doc.add_paragraph()
+            
+            # Project Information Section
+            info_table = doc.add_table(rows=4, cols=2)
+            info_table.style = 'Table Grid'
+            info_table.columns[0].width = Inches(2.0)
+            info_table.columns[1].width = Inches(5.0)
+            
+            # Row 1: Work Order
+            info_table.rows[0].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[0].cells[0].paragraphs[0].add_run("Work Order (WO):")
+            run1.bold = True
+            info_table.rows[0].cells[1].text = project_info['wo_number']
+            
+            # Row 2: Property Address
+            info_table.rows[1].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[1].cells[0].paragraphs[0].add_run("Property Address:")
+            run1.bold = True
+            info_table.rows[1].cells[1].text = project_info['property_address']
+            
+            # Row 3: Work Order Type
+            info_table.rows[2].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[2].cells[0].paragraphs[0].add_run("Work Order Type:")
+            run1.bold = True
+            info_table.rows[2].cells[1].text = project_info['wo_type']
+            
+            # Row 4: Client Code
+            info_table.rows[3].cells[0].paragraphs[0].clear()
+            run1 = info_table.rows[3].cells[0].paragraphs[0].add_run("Client Code:")
+            run1.bold = True
+            info_table.rows[3].cells[1].text = project_info['client_code']
+            
+            doc.add_paragraph()
+            
+            # Dates and Processor Name Section
+            dates_table = doc.add_table(rows=3, cols=2)
+            dates_table.style = 'Table Grid'
+            dates_table.columns[0].width = Inches(2.0)
+            dates_table.columns[1].width = Inches(5.0)
+            
+            # Row 1: Project Creation Date
+            dates_table.rows[0].cells[0].paragraphs[0].clear()
+            run1 = dates_table.rows[0].cells[0].paragraphs[0].add_run("Project Creation Date:")
+            run1.bold = True
+            dates_table.rows[0].cells[1].text = project_info['created_at']
+            
+            # Row 2: Project Last Modification Date
+            dates_table.rows[1].cells[0].paragraphs[0].clear()
+            run1 = dates_table.rows[1].cells[0].paragraphs[0].add_run("Project Last Modification Date:")
+            run1.bold = True
+            dates_table.rows[1].cells[1].text = project_info['updated_at']
+            
+            # Row 3: Processor Name
+            dates_table.rows[2].cells[0].paragraphs[0].clear()
+            run1 = dates_table.rows[2].cells[0].paragraphs[0].add_run("Processor Name:")
+            run1.bold = True
+            processor_name = self.username if hasattr(self, 'username') and self.username else "N/A"
+            dates_table.rows[2].cells[1].text = processor_name
+            
+            doc.add_paragraph()
+            
+            # Summary Section
+            total_items = len(bid_items)
+            
+            # Count occurrences of each item name
+            item_count_dict = {}
+            for item in all_selected_items:
+                item_name = item.get('original_name', 'Unknown Item')
+                item_count_dict[item_name] = item_count_dict.get(item_name, 0) + 1
+            
+            # Create list with counts
+            selected_items_with_counts = []
+            for item_name, count in sorted(item_count_dict.items()):
+                if count > 1:
+                    selected_items_with_counts.append(f"{item_name} ({count})")
+                else:
+                    selected_items_with_counts.append(item_name)
+            
+            summary_para1 = doc.add_paragraph()
+            summary_para1.add_run("Summary: ").bold = True
+            summary_para1.add_run(f"Total Bid Count: {total_items}")
+            
+            summary_para2 = doc.add_paragraph()
+            summary_para2.add_run("Items Selected:").bold = True
+            for item_with_count in selected_items_with_counts:
+                summary_para2.add_run(f"\n• {item_with_count}")
+            
+            doc.add_paragraph()
+            
+            # Add each bid item with format: Bid text -> Price -> Photo
+            for bid_item in bid_items:
+                # Add bid number and text
+                bid_paragraph = doc.add_paragraph()
+                bid_paragraph.add_run(f"{bid_item['number']}. {bid_item['text']}").bold = False
+                
+                # Add price below bid text
+                price_paragraph = doc.add_paragraph()
+                price_run = price_paragraph.add_run(f"Price ${bid_item['price']:.2f}")
+                price_run.bold = True
+                
+                # Add photo below price if available
+                if bid_item['photo'] and bid_item['photo'].get('original'):
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                            temp_path = temp_file.name
+                            bid_item['photo']['original'].save(temp_path)
+                        
+                        photo_paragraph = doc.add_paragraph()
+                        photo_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                        photo_paragraph.add_run().add_picture(temp_path, width=Inches(4.0))
+                        
+                        os.remove(temp_path)
+                    except Exception as e:
+                        print(f"Error adding image: {e}")
+                        error_para = doc.add_paragraph()
+                        error_para.add_run("Error loading image").italic = True
+                
+                # Add spacing between items
+                doc.add_paragraph()
+            
+            doc.add_paragraph()
+            footer = doc.add_paragraph('Generated by Techvengers Bid Writer')
+            footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            footer_run = footer.runs[0]
+            footer_run.italic = True
+            
+            # Generate filename: Bids_{WO}_{date}
+            wo_number_for_file = project_info['wo_number'].replace(" ", "_") if project_info['wo_number'] != "N/A" else "N/A"
+            date_str = datetime.now().strftime("%d%b")  # Format: 25Dec
+            default_filename = f"Bids_{wo_number_for_file}_{date_str}.docx"
+            
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".docx",
+                filetypes=[("Word Document", "*.docx"), ("All Files", "*.*")],
+                initialfile=default_filename,
+                title="Save Bids Document (Docs2 Format)"
+            )
+            
+            if file_path:
+                doc.save(file_path)
+                messagebox.showinfo("Success", f"Bids saved successfully to:\n{file_path}")
+                
+                if messagebox.askyesno("Open File", "Would you like to open the saved document?"):
+                    try:
+                        if os.name == 'nt':
+                            os.startfile(file_path)
+                        elif sys.platform == 'darwin':
+                            os.system(f'open "{file_path}"')
+                        else:
+                            os.system(f'xdg-open "{file_path}"')
+                    except Exception as e:
+                        messagebox.showinfo("File Saved", f"Document saved successfully!\nLocation: {file_path}")
+        
+        else:
+            # Fallback to text file
+            # Generate filename: Bids_{WO}_{date}
+            wo_number_for_file = project_info['wo_number'].replace(" ", "_") if project_info['wo_number'] != "N/A" else "N/A"
+            date_str = datetime.now().strftime("%d%b")  # Format: 25Dec
+            default_filename = f"Bids_{wo_number_for_file}_{date_str}.txt"
+            
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text Document", "*.txt"), ("All Files", "*.*")],
+                initialfile=default_filename,
+                title="Save Bids Document (Docs2 Format)"
+            )
+            
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    file.write("TECHVENGERS BID PROPOSAL\n")
+                    file.write("=" * 50 + "\n")
+                    file.write(f"Date: {datetime.now().strftime('%B %d, %Y')}\n\n")
+                    
+                    for bid_item in bid_items:
+                        file.write(f"{bid_item['number']}. {bid_item['text']}\n")
+                        file.write(f"Price ${bid_item['price']:.2f}\n")
+                        if bid_item['photo']:
+                            file.write("[Photo attached - see Word version for images]\n")
+                        file.write("\n")
+                        if bid_item != bid_items[-1]:
                             file.write("─" * 50 + "\n\n")
                     
                     file.write("\nGenerated by Techvengers Bid Writer\n")
@@ -1718,6 +2576,166 @@ class BidWriterApp:
             
         self.bid_count_label.config(text=f"Total Bids: {bid_number - 1}")
         self.output_text.config(state=tk.DISABLED)
+
+    def open_full_page_view(self):
+        """Open all bids in a new full-page window."""
+        # Check if there are any selected bids
+        total_selected = sum(
+            1 for cat_items in self.selected_items.values()
+            for item in cat_items.values() if item["selected"]
+        )
+        if total_selected == 0:
+            messagebox.showinfo("No Bids", "No bids selected! Please select bids and generate them first.")
+            return
+        
+        # Create new window
+        full_page_window = tk.Toplevel(self.root)
+        full_page_window.title("Full Page Bid View - Techvengers Bid Writer")
+        
+        # Make it full screen or large window
+        screen_width = full_page_window.winfo_screenwidth()
+        screen_height = full_page_window.winfo_screenheight()
+        full_page_window.geometry(f"{int(screen_width * 0.9)}x{int(screen_height * 0.9)}")
+        full_page_window.configure(bg=self.colors['white'])
+        
+        # Create header frame
+        header_frame = tk.Frame(full_page_window, bg=self.colors['primary_blue'], height=60)
+        header_frame.pack(fill='x')
+        header_frame.pack_propagate(False)
+        
+        title_label = tk.Label(header_frame, text="Full Page Bid View", 
+                              font=("Arial", 16, "bold"), fg='white', 
+                              bg=self.colors['primary_blue'])
+        title_label.pack(side="left", padx=20, pady=15)
+        
+        close_button = tk.Button(header_frame, text="✕ Close", 
+                                font=("Arial", 12, "bold"), bg="#dc3545",
+                                fg="white", relief="flat", cursor="hand2",
+                                activebackground="#c82333",
+                                command=full_page_window.destroy)
+        close_button.pack(side="right", padx=20, pady=15)
+        
+        # Create main content frame with scrollbar
+        content_frame = tk.Frame(full_page_window, bg=self.colors['white'])
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        
+        scrollbar = tk.Scrollbar(content_frame)
+        scrollbar.pack(side="right", fill="y")
+        
+        full_page_text = tk.Text(content_frame, font=("Arial", 12), 
+                                bg=self.colors['white'], fg=self.colors['text_primary'],
+                                wrap=tk.WORD, relief="flat", padx=20, pady=20,
+                                yscrollcommand=scrollbar.set)
+        full_page_text.pack(fill='both', expand=True)
+        scrollbar.config(command=full_page_text.yview)
+        
+        # Generate bids in the same format as generate_bids method
+        full_page_text.config(state=tk.NORMAL)
+        full_page_text.delete("1.0", tk.END)
+        full_page_text.images = []
+        
+        conjunction_groups = {}
+        standalone_bids = []
+        
+        # Process all categories to collect selected items
+        for cat_items in self.selected_items.values():
+            for item in cat_items.values():
+                if item["selected"]:
+                    key = item["conjunction_key"].get().strip().upper()
+                    if key:
+                        if key not in conjunction_groups:
+                            conjunction_groups[key] = []
+                        conjunction_groups[key].append(item)
+                    else:
+                        standalone_bids.append(item)
+        
+        bid_number = 1
+        
+        # Process conjunction groups
+        for key in sorted(conjunction_groups.keys()):
+            items = conjunction_groups[key]
+            sorted_items = sorted(items, key=lambda x: x['instance_info']['key'])
+            for item in sorted_items:
+                bid_text, photo_key = self._get_item_bid_data(item)
+                numbered_bid = f"{bid_number}. {bid_text}"
+                full_page_text.insert(tk.END, f"{numbered_bid}\n")
+                # Append price line under the bid text
+                try:
+                    qty_val = float((item["qty"].get() if hasattr(item["qty"], "get") else str(item["qty"])) or 0)
+                except Exception:
+                    qty_val = 0.0
+                try:
+                    unit_val = float((item["unit_price"].get() if hasattr(item["unit_price"], "get") else str(item["unit_price"])) or 0)
+                except Exception:
+                    unit_val = 0.0
+                total_val = round(qty_val * unit_val, 2)
+                full_page_text.insert(tk.END, f"Price: ${total_val:.2f}\n")
+                
+                # Insert photo if available
+                self._insert_photo_to_text(full_page_text, photo_key)
+                bid_number += 1
+        
+        # Process standalone bids
+        for item in sorted(standalone_bids, key=lambda x: x['instance_info']['key']):
+            bid_text, photo_key = self._get_item_bid_data(item)
+            numbered_bid = f"{bid_number}. {bid_text}"
+            full_page_text.insert(tk.END, f"{numbered_bid}\n")
+            # Append price line under the bid text
+            try:
+                qty_val = float((item["qty"].get() if hasattr(item["qty"], "get") else str(item["qty"])) or 0)
+            except Exception:
+                qty_val = 0.0
+            try:
+                unit_val = float((item["unit_price"].get() if hasattr(item["unit_price"], "get") else str(item["unit_price"])) or 0)
+            except Exception:
+                unit_val = 0.0
+            total_val = round(qty_val * unit_val, 2)
+            full_page_text.insert(tk.END, f"Price: ${total_val:.2f}\n")
+            
+            # Insert photo if available
+            self._insert_photo_to_text(full_page_text, photo_key)
+            bid_number += 1
+        
+        full_page_text.config(state=tk.DISABLED)
+        
+        # Bind mouse wheel scrolling
+        def _on_mousewheel(event):
+            try:
+                if hasattr(event, 'delta') and event.delta:
+                    delta = int(-1 * (event.delta / 120))
+                else:
+                    delta = -1 if event.num == 4 else 1
+                full_page_text.yview_scroll(delta, "units")
+            except (AttributeError, TypeError):
+                pass
+        
+        full_page_text.bind("<MouseWheel>", _on_mousewheel)
+        full_page_text.bind("<Button-4>", lambda e: full_page_text.yview_scroll(-1, "units"))
+        full_page_text.bind("<Button-5>", lambda e: full_page_text.yview_scroll(1, "units"))
+        
+        # Focus on the new window
+        full_page_window.focus_set()
+    
+    def _insert_photo_to_text(self, text_widget, photo_key):
+        """Insert a photo into a text widget (helper for full page view)."""
+        if photo_key in self.item_photos and self.item_photos[photo_key]:
+            try:
+                text_widget.insert(tk.END, "\n")
+                image_data = self.item_photos[photo_key]['original'].copy()
+                max_width, max_height = 400, 300
+                image_data.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+                photo_for_output = ImageTk.PhotoImage(image_data)
+                
+                text_widget.image_create(tk.END, image=photo_for_output)
+                
+                # Keep reference to prevent garbage collection
+                if not hasattr(text_widget, 'images'):
+                    text_widget.images = []
+                text_widget.images.append(photo_for_output)
+                
+                text_widget.insert(tk.END, "\n\n")
+            except Exception as e:
+                print(f"Error inserting image in full page view: {e}")
 
     def _get_item_bid_data(self, item):
         """Return the text to use for an item's bid and the associated photo key.
