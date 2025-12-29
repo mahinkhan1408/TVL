@@ -65,7 +65,7 @@ class LoginPage:
         self.save_password_checkbox = tk.Checkbutton(checkbox_frame, text="Save Password", font=("Arial", 9), bg=self.colors['background'], variable=self.save_password_var)
         self.save_password_checkbox.pack(side="left", padx=5)
         
-        login_button_frame = self.create_shadow_button(
+        login_button_frame, self.login_button = self.create_shadow_button(
             self.login_frame, 
             "Login", 
             self.login_check, 
@@ -74,6 +74,9 @@ class LoginPage:
             self.colors['shadow_gray']
         )
         login_button_frame.pack(pady=10)
+        
+        # Initially disable login button until database is connected
+        self.login_button.config(state='disabled', cursor='arrow')
         
         self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
         os.makedirs(self.app_data_dir, exist_ok=True)
@@ -102,7 +105,7 @@ class LoginPage:
             pady=pady
         )
         button.pack(padx=2, pady=2)
-        return shadow_frame
+        return shadow_frame, button
         
     def init_database_async(self):
         """Initialize database connection asynchronously to prevent blocking UI."""
@@ -115,6 +118,9 @@ class LoginPage:
                 def update_db():
                     self.db = db
                     self.db_ready = True
+                    # Enable login button when database is ready
+                    if hasattr(self, 'login_button'):
+                        self.login_button.config(state='normal', cursor='hand2')
                     print("[Login] Database connection initialized successfully")
                 
                 self.master.after(0, update_db)
@@ -125,8 +131,11 @@ class LoginPage:
                 def set_error():
                     self.db = None
                     self.db_ready = False
+                    # Keep login button disabled when database connection fails
+                    if hasattr(self, 'login_button'):
+                        self.login_button.config(state='disabled', cursor='arrow')
                     # Don't show error popup on startup - just log it
-                    # User can still try to login, and we'll show error then if needed
+                    # Button will remain disabled so user can't attempt login
                 
                 self.master.after(0, set_error)
         
@@ -159,22 +168,17 @@ class LoginPage:
                 pass
     
     def login_check(self):
+        # This method should only be called when button is enabled (database is ready)
+        # But add a safety check just in case
+        if not self.db_ready or self.db is None:
+            return
+        
         username = self.username_entry.get().strip()
         password = self.password_entry.get()
         
         if not username or not password:
             messagebox.showerror("Login Failed", "Please enter both username and password.")
             return
-        
-        # Wait for database to be ready (with timeout)
-        if not self.db_ready:
-            if self.db is None:
-                messagebox.showerror("Database Error", 
-                    "Database connection is not available. Please check your internet connection and Supabase configuration.")
-                return
-            else:
-                messagebox.showwarning("Loading", "Database is still connecting. Please wait a moment and try again.")
-                return
         
         try:
             # Verify credentials against Supabase database

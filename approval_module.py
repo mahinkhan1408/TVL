@@ -373,13 +373,33 @@ class ApprovalModule:
                         # Use larger font for price fields (columns 3, 4, 5)
                         is_price_col = col_idx in [3, 4, 5]
                         font_size = ("Segoe UI", 12, "bold") if is_price_col else ("Segoe UI", 10)
-                        cell = tk.Label(row_frame, text=cell_data,
-                                      font=font_size,
-                                      bg=row_frame.cget('bg'),
-                                      fg=self.colors.get('text_primary', '#1F2937'),
-                                      anchor='w',
-                                      relief='solid', bd=1, padx=10, pady=8)
+                        
+                        # Use Text widget for selectable/copyable content
+                        cell = tk.Text(row_frame,
+                                     font=font_size,
+                                     bg=row_frame.cget('bg'),
+                                     fg=self.colors.get('text_primary', '#1F2937'),
+                                     relief='solid', bd=1,
+                                     wrap='none',
+                                     height=1,
+                                     padx=10, pady=8,
+                                     highlightthickness=0,
+                                     borderwidth=1)
+                        cell.insert('1.0', cell_data)
+                        cell.config(state='disabled')  # Read-only but selectable
                         cell.grid(row=0, column=col_idx, sticky='nsew', padx=1, pady=1)
+                        
+                        # Bind Ctrl+C for copy
+                        def copy_text(event):
+                            try:
+                                if cell.tag_ranges(tk.SEL):
+                                    text = cell.get(tk.SEL_FIRST, tk.SEL_LAST)
+                                    cell.clipboard_clear()
+                                    cell.clipboard_append(text)
+                                return "break"
+                            except:
+                                pass
+                        cell.bind('<Control-c>', copy_text)
                 
                 current_row += 1
             
@@ -406,13 +426,37 @@ class ApprovalModule:
                 # Price columns (3, 4, 5) should have larger font
                 is_price_col = col_idx in [3, 4, 5]
                 font_size = ("Segoe UI", 13, "bold") if is_price_col else ("Segoe UI", 11, "bold")
-                cell = tk.Label(total_row, text=cell_data,
-                              font=font_size,
-                              bg=self.colors.get('nav_hover', '#2563EB'),
-                              fg='white',
-                              anchor='w' if col_idx > 0 else 'center',
-                              relief='solid', bd=1, padx=10, pady=10)
+                
+                # Use Text widget for selectable/copyable content in total row
+                cell = tk.Text(total_row,
+                             font=font_size,
+                             bg=self.colors.get('nav_hover', '#2563EB'),
+                             fg='white',
+                             relief='solid', bd=1,
+                             wrap='none',
+                             height=1,
+                             padx=10, pady=10,
+                             highlightthickness=0,
+                             borderwidth=1)
+                cell.insert('1.0', cell_data)
+                cell.config(state='disabled')  # Read-only but selectable
+                # Align text
+                if col_idx == 0:
+                    cell.tag_add("center", "1.0", "end")
+                    cell.tag_configure("center", justify='center')
                 cell.grid(row=0, column=col_idx, sticky='nsew', padx=1, pady=1)
+                
+                # Bind Ctrl+C for copy
+                def copy_text(event):
+                    try:
+                        if cell.tag_ranges(tk.SEL):
+                            text = cell.get(tk.SEL_FIRST, tk.SEL_LAST)
+                            cell.clipboard_clear()
+                            cell.clipboard_append(text)
+                        return "break"
+                    except:
+                        pass
+                cell.bind('<Control-c>', copy_text)
         
     
     def decrement_month(self):

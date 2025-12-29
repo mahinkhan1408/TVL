@@ -105,6 +105,10 @@ class BidWriterApp:
         self.all_items = {}
         self.bid_data_url = "https://docs.google.com/spreadsheets/d/1sBPUtZqtoPREX2STfjBIs_kNF4HE4kCvsyloL9oC-tY/gviz/tq?tqx=out:csv&sheet=Sheet1"
         
+        # Initialize Custom category as empty (will always appear first)
+        self.custom_category_name = "Custom"
+        self.all_items[self.custom_category_name] = []
+        
         self.selected_items = {}
         self.item_photos = {}
         self.item_instances = {}
@@ -653,8 +657,12 @@ class BidWriterApp:
         
         self.active_category_button = None
         
-        # Get list of categories
+        # Get list of categories, ensuring Custom is first
         categories = list(self.all_items.keys())
+        if self.custom_category_name in categories:
+            categories.remove(self.custom_category_name)
+            categories.insert(0, self.custom_category_name)
+        
         total_categories = len(categories)
         
         # Calculate buttons per row (half rounded up)
@@ -720,9 +728,11 @@ class BidWriterApp:
 
     def load_bids_from_url_async(self, url):
         """Loads bid data asynchronously to prevent blocking UI."""
-        # Initialize empty categories first
+        # Initialize empty categories first, but preserve Custom category
         self.categories = {}
         self.all_items = {}
+        # Ensure Custom category is always present
+        self.all_items[self.custom_category_name] = []
         
         # Show loading indicator
         loading_label = tk.Label(self.category_frame, text="Loading bids...", 
@@ -757,6 +767,9 @@ class BidWriterApp:
                     loading_label.destroy()
                     self.categories = categories
                     self.all_items = all_items
+                    # Ensure Custom category is always present
+                    if self.custom_category_name not in self.all_items:
+                        self.all_items[self.custom_category_name] = []
                     self.update_bid_buttons()
                     if self.categories:
                         self.active_category = list(self.categories.keys())[0]
@@ -825,6 +838,9 @@ class BidWriterApp:
                     self.categories[category].append({'item_name': item_name, 'template': template, 'unit_price': unit_price})
             
             self.all_items = self.categories.copy()
+            # Ensure Custom category is always present
+            if self.custom_category_name not in self.all_items:
+                self.all_items[self.custom_category_name] = []
             
         except requests.exceptions.RequestException as e:
             messagebox.showwarning("Network Error", f"Could not connect to the online file. Using default bids.\nError: {e}")
@@ -852,7 +868,428 @@ class BidWriterApp:
             ]
         }
         self.all_items = self.categories.copy()
+        # Ensure Custom category is always present
+        if self.custom_category_name not in self.all_items:
+            self.all_items[self.custom_category_name] = []
         
+    def load_custom_items(self):
+        """Load blank rows for Custom category that can be filled by user"""
+        # Preserve preview text content before destroying widgets
+        if self.custom_category_name in self.selected_items:
+            for item_key, item_info in self.selected_items[self.custom_category_name].items():
+                if item_info.get("preview_text"):
+                    try:
+                        if item_info["preview_text"].winfo_exists():
+                            preview_content = item_info["preview_text"].get("1.0", tk.END).strip()
+                            if preview_content:
+                                item_info["preview_text_content"] = preview_content
+                                item_info["user_edited"] = True  # Mark as edited to preserve
+                    except:
+                        pass
+        
+        # Clear scrollable frame first
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        grid_frame = tk.Frame(self.scrollable_frame, bg=self.colors['white'])
+        grid_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.bind_mousewheel_to_widget(grid_frame)
+        
+        # Column configurations
+        col_configs = [
+            (0, 40, 0),     # Key column
+            (1, 40, 0),     # Add/Delete column
+            (2, 120, 2),    # Item column
+            (3, 50, 0),     # Qty column
+            (4, 70, 0),     # Unit Price column
+            (5, 70, 0),     # Total Price column
+            (6, 120, 2),    # Location column
+            (7, 150, 2),    # Additional Info column
+            (8, 350, 4),    # Live Preview column
+            (9, 150, 4)     # Photo column
+        ]
+        
+        for col, min_width, weight in col_configs:
+            grid_frame.grid_columnconfigure(col, minsize=min_width, weight=int(weight))
+        
+        # Headers
+        headings = ["Key", "Add", "Item", "Qty", "Unit Price", "Total Price", "Location", "Additional Info", "Live Preview", "Photo"]
+        for col, heading in enumerate(headings):
+            header_frame = tk.Frame(grid_frame, bg=self.colors['primary_blue'], relief="flat", bd=1)
+            header_frame.grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
+            label = tk.Label(header_frame, text=heading, font=("Arial", 11, "bold"), 
+                             bg=self.colors['primary_blue'], fg='white', anchor="w")
+            label.pack(fill="both", expand=True, padx=8, pady=8)
+            self.bind_mousewheel_to_widget(header_frame)
+            self.bind_mousewheel_to_widget(label)
+        
+        # Clear existing rows (but keep headers)
+        for widget in grid_frame.grid_slaves():
+            if int(widget.grid_info()["row"]) > 0:
+                widget.destroy()
+        
+        # Initialize custom instances if not exists
+        if self.custom_category_name not in self.item_instances:
+            self.item_instances[self.custom_category_name] = {}
+        if self.custom_category_name not in self.selected_items:
+            self.selected_items[self.custom_category_name] = {}
+        
+        # Get existing custom instances from saved state or create one if empty
+        custom_instances = []
+        for item_name in self.item_instances[self.custom_category_name]:
+            custom_instances.extend(self.item_instances[self.custom_category_name][item_name])
+        
+        # Also get instances from selected_items if they exist but aren't in item_instances yet
+        for item_key, item_info in self.selected_items[self.custom_category_name].items():
+            instance_info = item_info.get('instance_info', {})
+            if instance_info:
+                # Check if this instance is already in our list
+                existing = any(inst.get('key') == instance_info.get('key') for inst in custom_instances)
+                if not existing:
+                    # Ensure the instance is in item_instances structure
+                    item_name = item_info.get('original_name', instance_info.get('display_name', 'Custom Item'))
+                    if item_name not in self.item_instances[self.custom_category_name]:
+                        self.item_instances[self.custom_category_name][item_name] = []
+                    if instance_info not in self.item_instances[self.custom_category_name][item_name]:
+                        self.item_instances[self.custom_category_name][item_name].append(instance_info)
+                        custom_instances.append(instance_info)
+        
+        # Initialize counter if needed
+        if not hasattr(self, 'custom_item_counter'):
+            self.custom_item_counter = 1
+        
+        # If no custom items exist, create one blank row
+        if not custom_instances:
+            instance_key = f"custom_item_{self.custom_item_counter}"
+            item_name = "Custom Item 1"
+            if item_name not in self.item_instances[self.custom_category_name]:
+                self.item_instances[self.custom_category_name][item_name] = []
+            new_instance = {
+                'instance_id': 1,
+                'display_name': item_name,
+                'key': instance_key,
+                'is_custom': True
+            }
+            self.item_instances[self.custom_category_name][item_name].append(new_instance)
+            custom_instances = [new_instance]
+            self.custom_item_counter += 1
+        
+        # Sort instances by key
+        custom_instances.sort(key=lambda x: x['key'])
+        
+        # Create rows for each custom instance
+        row_idx = 1
+        for instance_info in custom_instances:
+            instance_key = instance_info['key']
+            item_name = instance_info.get('display_name', 'Custom Item')
+            
+            # Initialize item info if not exists
+            if instance_key not in self.selected_items[self.custom_category_name]:
+                self.selected_items[self.custom_category_name][instance_key] = {
+                    "selected": False,
+                    "template": "{description}",  # Simple template for custom items (no price)
+                    "qty": tk.StringVar(value="0"),
+                    "unit_price": tk.StringVar(value="0.00"),
+                    "location": tk.StringVar(),
+                    "add_info": tk.StringVar(),
+                    "conjunction_key": tk.StringVar(),
+                    "total_price_label": None,
+                    "item_name_entry": None,  # Entry for custom item name
+                    "checkbox": None,  # Checkbox for selection
+                    "preview_text": None,
+                    "preview_text_content": "",  # Store preview text content as string
+                    "original_name": item_name,
+                    "instance_info": instance_info,
+                    "photo_frame": None,
+                    "photo_label": None,
+                    "user_edited": False,
+                    "is_custom": True
+                }
+            else:
+                # Preserve existing preview_text_content if it exists
+                if "preview_text_content" not in item_info:
+                    item_info["preview_text_content"] = ""
+            
+            item_info = self.selected_items[self.custom_category_name][instance_key]
+            
+            # Create row cells (similar to regular items but with editable Item field)
+            self.create_custom_row(grid_frame, row_idx, item_info, instance_info)
+            row_idx += 1
+        
+        # Reset scroll position
+        self.reset_scroll_to_top()
+    
+    def create_custom_row(self, grid_frame, row_idx, item_info, instance_info):
+        """Create a single custom row with editable fields"""
+        category = self.custom_category_name
+        instance_key = instance_info['key']
+        
+        # Key cell
+        key_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        key_cell.grid(row=row_idx, column=0, sticky="nsew", padx=1, pady=1)
+        key_entry = tk.Entry(key_cell, textvariable=item_info["conjunction_key"], font=("Arial", 9), 
+                             justify="center", bg=self.colors['white'], fg=self.colors['text_primary'], 
+                             relief="flat", bd=0, width=5)
+        key_entry.pack(fill="both", expand=True, padx=3, pady=3)
+        self.bind_mousewheel_to_widget(key_cell)
+        self.bind_mousewheel_to_widget(key_entry)
+        
+        # Add/Delete cell - always show + button for custom items
+        add_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        add_cell.grid(row=row_idx, column=1, sticky="nsew", padx=1, pady=1)
+        self.bind_mousewheel_to_widget(add_cell)
+        
+        def make_add_callback():
+            return lambda: self.add_custom_row()
+        
+        add_btn = tk.Button(add_cell, text="+", font=("Arial", 12, "bold"),
+                             bg=self.colors['light_blue'], fg='white', 
+                             relief="flat", cursor="hand2",
+                             activebackground=self.colors['primary_blue'],
+                             command=make_add_callback())
+        add_btn.pack(fill="both", expand=True, padx=2, pady=2)
+        self.bind_mousewheel_to_widget(add_btn)
+        
+        # Item cell - Entry field with checkbox for selection
+        item_cell = tk.Frame(grid_frame, bd=1, relief="solid", 
+                             bg=self.colors['selected'] if item_info["selected"] else self.colors['gray_light'])
+        item_cell.grid(row=row_idx, column=2, sticky="nsew", padx=1, pady=1)
+        
+        # Checkbox for selection
+        item_checkbox_var = tk.BooleanVar(value=item_info["selected"])
+        def toggle_custom_item():
+            item_info["selected"] = not item_info["selected"]
+            item_checkbox_var.set(item_info["selected"])
+            # Update cell background color
+            new_bg = self.colors['selected'] if item_info["selected"] else self.colors['gray_light']
+            item_cell.configure(bg=new_bg)
+            entry_bg = self.colors['selected'] if item_info["selected"] else self.colors['white']
+            item_name_entry.configure(bg=entry_bg)
+            checkbox_bg = new_bg
+            item_checkbox.configure(bg=checkbox_bg, activebackground=checkbox_bg)
+            self.update_all_previews()
+        
+        item_checkbox = tk.Checkbutton(item_cell, variable=item_checkbox_var,
+                                       command=toggle_custom_item,
+                                       bg=self.colors['selected'] if item_info["selected"] else self.colors['gray_light'],
+                                       activebackground=self.colors['selected'] if item_info["selected"] else self.colors['gray_light'],
+                                       highlightthickness=0)
+        item_checkbox.pack(side="left", padx=(3, 3))
+        item_info["checkbox"] = item_checkbox
+        item_info["checkbox_var"] = item_checkbox_var
+        
+        # Entry field for item name
+        item_name_var = tk.StringVar(value=item_info.get("original_name", "Custom Item"))
+        item_name_entry = tk.Entry(item_cell, textvariable=item_name_var, font=("Arial", 9),
+                                    bg=self.colors['white'] if not item_info["selected"] else self.colors['selected'],
+                                    fg=self.colors['text_primary'],
+                                    relief="flat", bd=0)
+        item_name_entry.pack(side="left", fill="both", expand=True, padx=(0, 3), pady=3)
+        
+        # Store reference and update on change (but don't update preview)
+        def update_item_name(*args):
+            new_name = item_name_var.get()
+            item_info["original_name"] = new_name
+            instance_info['display_name'] = new_name
+            # Don't update preview - item name should not appear in preview
+        
+        item_name_var.trace_add("write", update_item_name)
+        item_info["item_name_entry"] = item_name_entry
+        self.bind_mousewheel_to_widget(item_cell)
+        self.bind_mousewheel_to_widget(item_name_entry)
+        self.bind_mousewheel_to_widget(item_checkbox)
+        
+        # Qty cell
+        qty_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        qty_cell.grid(row=row_idx, column=3, sticky="nsew", padx=1, pady=1)
+        qty_entry = tk.Entry(qty_cell, textvariable=item_info["qty"], font=("Arial", 9), 
+                             justify="center", bg=self.colors['white'], fg=self.colors['text_primary'],
+                             relief="flat", bd=0)
+        qty_entry.pack(fill="both", expand=True, padx=3, pady=3)
+        self.bind_mousewheel_to_widget(qty_cell)
+        self.bind_mousewheel_to_widget(qty_entry)
+        
+        # Unit Price cell
+        price_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        price_cell.grid(row=row_idx, column=4, sticky="nsew", padx=1, pady=1)
+        unit_price_entry = tk.Entry(price_cell, textvariable=item_info["unit_price"], 
+                                     font=("Arial", 9), justify="center", 
+                                     bg=self.colors['white'], fg=self.colors['text_primary'], 
+                                     relief="flat", bd=0)
+        unit_price_entry.pack(fill="both", expand=True, padx=3, pady=3)
+        self.bind_mousewheel_to_widget(price_cell)
+        self.bind_mousewheel_to_widget(unit_price_entry)
+        
+        # Total Price cell
+        total_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        total_cell.grid(row=row_idx, column=5, sticky="nsew", padx=1, pady=1)
+        total_label = tk.Label(total_cell, text="0.00", font=("Arial", 9, "bold"), 
+                                bg=self.colors['background'], fg=self.colors['text_primary'],
+                                justify="center")
+        total_label.pack(fill="both", expand=True, padx=3, pady=3)
+        item_info["total_price_label"] = total_label
+        self.bind_mousewheel_to_widget(total_cell)
+        self.bind_mousewheel_to_widget(total_label)
+        
+        # Location cell
+        location_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        location_cell.grid(row=row_idx, column=6, sticky="nsew", padx=1, pady=1)
+        location_entry = tk.Entry(location_cell, textvariable=item_info["location"], 
+                                   font=("Arial", 9), bg=self.colors['white'], 
+                                   fg=self.colors['text_primary'], relief="flat", bd=0)
+        location_entry.pack(fill="both", expand=True, padx=3, pady=3)
+        self.bind_mousewheel_to_widget(location_cell)
+        self.bind_mousewheel_to_widget(location_entry)
+        
+        # Additional Info cell
+        add_info_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        add_info_cell.grid(row=row_idx, column=7, sticky="nsew", padx=1, pady=1)
+        add_info_entry = tk.Entry(add_info_cell, textvariable=item_info["add_info"], 
+                                   font=("Arial", 9), bg=self.colors['white'], 
+                                   fg=self.colors['text_primary'], relief="flat", bd=0)
+        add_info_entry.pack(fill="both", expand=True, padx=3, pady=3)
+        self.bind_mousewheel_to_widget(add_info_cell)
+        self.bind_mousewheel_to_widget(add_info_entry)
+        
+        # Live Preview cell
+        preview_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        preview_cell.grid(row=row_idx, column=8, sticky="nsew", padx=1, pady=1)
+        preview_cell.grid_propagate(False)
+        preview_cell.configure(width=350)
+        
+        preview_text = tk.Text(preview_cell, font=("Arial", 9), width=45,
+                               bg=self.colors['preview_bg'], fg=self.colors['text_primary'],
+                               relief="flat", bd=0, wrap=tk.WORD, height=6,
+                               state=tk.NORMAL)
+        preview_text.pack(fill="both", expand=True, padx=3, pady=3)
+        preview_text.bind("<KeyRelease>", lambda e, item=item_info: self.on_preview_text_change(item))
+        item_info["preview_text"] = preview_text
+        
+        # Restore preview text content if it exists (from previous view or saved state)
+        preview_content = item_info.get("preview_text_content", "")
+        if preview_content:
+            preview_text.insert("1.0", preview_content)
+            item_info["user_edited"] = True  # Mark as edited so it won't be auto-updated
+        
+        self.bind_mousewheel_to_widget(preview_cell)
+        self.bind_mousewheel_to_widget(preview_text)
+        
+        # Photo cell
+        photo_cell = tk.Frame(grid_frame, bd=1, relief="solid", bg=self.colors['gray_light'])
+        photo_cell.grid(row=row_idx, column=9, sticky="nsew", padx=1, pady=1)
+        
+        photo_frame = tk.Frame(photo_cell, bg=self.colors['white'], relief="flat", 
+                               bd=1, height=100)
+        photo_frame.pack(fill="both", expand=True, padx=3, pady=3)
+        photo_frame.pack_propagate(False)
+        
+        photo_label = tk.Label(photo_frame, text="Click to Select Photo", 
+                               font=("Arial", 8), fg=self.colors['gray_medium'],
+                               bg=self.colors['white'], cursor="hand2")
+        photo_label.pack(fill="both", expand=True)
+        
+        photo_buttons_frame = tk.Frame(photo_frame, bg=self.colors['white'])
+        photo_buttons_frame.pack(side="bottom", fill="x", padx=3, pady=3)
+        
+        paste_btn = tk.Button(photo_buttons_frame, text="Paste (Ctrl+V)",
+                               font=("Arial", 7), bg=self.colors['light_blue'],
+                               fg="white", relief="flat", cursor="hand2",
+                               command=lambda: self.handle_paste(category, instance_key))
+        paste_btn.pack(side="bottom", pady=(2, 0))
+        
+        self.bind_mousewheel_to_widget(photo_cell)
+        self.bind_mousewheel_to_widget(photo_frame)
+        self.bind_mousewheel_to_widget(photo_label)
+        self.bind_mousewheel_to_widget(photo_buttons_frame)
+        self.bind_mousewheel_to_widget(paste_btn)
+        
+        photo_frame.bind("<Enter>", lambda e, cell=photo_frame: self.on_enter(cell))
+        photo_frame.bind("<Leave>", lambda e, cell=photo_frame: self.on_leave(cell))
+        
+        item_info["photo_frame"] = photo_frame
+        item_info["photo_label"] = photo_label
+        
+        photo_key = f"{category}_{instance_key}"
+        if photo_key in self.item_photos and self.item_photos[photo_key]:
+            self.load_photo_display(category, instance_key)
+        
+        def make_photo_callbacks():
+            return {
+                'click': lambda e: self.select_photo(category, instance_key),
+            }
+        
+        callbacks = make_photo_callbacks()
+        photo_label.bind("<Button-1>", callbacks['click'])
+        photo_frame.bind("<Button-1>", callbacks['click'])
+        
+        def on_focus_in(event):
+            self.current_photo_item = (category, instance_key)
+        
+        photo_frame.bind("<FocusIn>", on_focus_in)
+        photo_label.bind("<FocusIn>", on_focus_in)
+        
+        # Bind trace for updates (for custom items, don't auto-update preview if user has edited)
+        def safe_update_preview(item_ref):
+            if item_ref.get("is_custom", False) and item_ref.get("user_edited", False):
+                # Only update total, not preview for custom items with user edits
+                try:
+                    q_str = item_ref["qty"].get().strip().replace(",", "")
+                    p_str = item_ref["unit_price"].get().strip().replace(",", "")
+                    q = float(q_str) if q_str else 0.0
+                    p = float(p_str) if p_str else 0.0
+                    total = round(q * p, 2)
+                    if item_ref["total_price_label"] and item_ref["total_price_label"].winfo_exists():
+                        item_ref["total_price_label"].config(text=f"{total:.2f}")
+                except:
+                    pass
+            else:
+                self.update_total_and_preview(item_ref)
+        
+        item_info["qty"].trace_add("write", lambda *_args, i=item_info: safe_update_preview(i))
+        item_info["unit_price"].trace_add("write", lambda *_args, i=item_info: safe_update_preview(i))
+        item_info["location"].trace_add("write", lambda *_args, i=item_info: safe_update_preview(i))
+        item_info["add_info"].trace_add("write", lambda *_args, i=item_info: safe_update_preview(i))
+        item_info["conjunction_key"].trace_add("write", lambda *_args, i=item_info: self.update_all_previews())
+        
+        # Initial update (only if not user-edited for custom items)
+        if not (item_info.get("is_custom", False) and item_info.get("user_edited", False)):
+            self.update_total_and_preview(item_info)
+    
+    def add_custom_row(self):
+        """Add a new blank custom row"""
+        if not hasattr(self, 'custom_item_counter'):
+            self.custom_item_counter = 1
+        
+        # Find next available counter
+        existing_keys = []
+        if self.custom_category_name in self.item_instances:
+            for item_list in self.item_instances[self.custom_category_name].values():
+                for inst in item_list:
+                    existing_keys.append(inst['key'])
+        
+        while f"custom_item_{self.custom_item_counter}" in existing_keys:
+            self.custom_item_counter += 1
+        
+        instance_key = f"custom_item_{self.custom_item_counter}"
+        item_name = f"Custom Item {self.custom_item_counter}"
+        
+        if self.custom_category_name not in self.item_instances:
+            self.item_instances[self.custom_category_name] = {}
+        if item_name not in self.item_instances[self.custom_category_name]:
+            self.item_instances[self.custom_category_name][item_name] = []
+        
+        new_instance = {
+            'instance_id': 1,
+            'display_name': item_name,
+            'key': instance_key,
+            'is_custom': True
+        }
+        self.item_instances[self.custom_category_name][item_name].append(new_instance)
+        self.custom_item_counter += 1
+        
+        # Reload custom items to show new row
+        self.load_custom_items()
+    
     def load_items(self, category):
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
@@ -876,7 +1313,7 @@ class BidWriterApp:
             (5, 70, 0),     # Total Price column (fixed width)
             (6, 120, 2),    # Location column (expands)
             (7, 150, 2),    # Additional Info column (expands)
-            (8, 200, 2),    # Additional Info column (expands)
+            (8, 350, 4),    # Live Preview column (wider - increased from 200 to 350, weight from 2 to 4)
 
             (9, 150, 4)     # Photo column (much wider - ensures photos are visible)
         ]
@@ -903,6 +1340,11 @@ class BidWriterApp:
         
         if category not in self.item_instances:
             self.item_instances[category] = {}
+
+        # Handle Custom category separately - show blank rows
+        if category == self.custom_category_name:
+            self.load_custom_items()
+            return
 
         if category and category in self.all_items:
             for item_data in self.all_items[category]:
@@ -1074,9 +1516,9 @@ class BidWriterApp:
                 preview_cell.grid(row=row_idx, column=8, sticky="nsew", padx=1, pady=1)
                 # Keep this column compact: do not let children expand the cell's size
                 preview_cell.grid_propagate(False)
-                preview_cell.configure(width=80)
+                preview_cell.configure(width=350)  # Increased from 80 to 350 to match column width
 
-                preview_text = tk.Text(preview_cell, font=("Arial", 9), width=12,
+                preview_text = tk.Text(preview_cell, font=("Arial", 9), width=45,  # Increased from 12 to 45 for wider text
                                        bg=self.colors['preview_bg'], fg=self.colors['text_primary'],
                                        relief="flat", bd=0, wrap=tk.WORD, height=6,
                                        state=tk.NORMAL)
@@ -1189,6 +1631,18 @@ class BidWriterApp:
         for category, items in self.selected_items.items():
             state["selected_items"][category] = {}
             for item_key, item_data in items.items():
+                # Save preview text content if it exists (for custom items especially)
+                preview_text_content = ""
+                if item_data.get("preview_text"):
+                    try:
+                        if item_data["preview_text"].winfo_exists():
+                            preview_text_content = item_data["preview_text"].get("1.0", tk.END).strip()
+                    except:
+                        pass
+                # Also check if preview_text_content was already saved as a string
+                if not preview_text_content and item_data.get("preview_text_content"):
+                    preview_text_content = item_data["preview_text_content"]
+                
                 state["selected_items"][category][item_key] = {
                     "selected": item_data["selected"],
                     "template": item_data["template"],
@@ -1198,7 +1652,10 @@ class BidWriterApp:
                     "add_info": item_data["add_info"].get(),
                     "original_name": item_data["original_name"],
                     "instance_info": item_data["instance_info"],
-                    "conjunction_key": item_data["conjunction_key"].get()
+                    "conjunction_key": item_data["conjunction_key"].get(),
+                    "preview_text_content": preview_text_content,  # Save preview text content
+                    "user_edited": item_data.get("user_edited", False),  # Save user_edited flag
+                    "is_custom": item_data.get("is_custom", False)  # Save is_custom flag
                 }
         
         # Save photo data - preserve the full dictionary structure (path, original image, etc.)
@@ -1392,14 +1849,24 @@ class BidWriterApp:
             self.selected_items = {}
             self.item_photos = {}
             self.item_instances = {}
+            # Ensure Custom category is initialized
+            if self.custom_category_name not in self.item_instances:
+                self.item_instances[self.custom_category_name] = {}
+            if self.custom_category_name not in self.selected_items:
+                self.selected_items[self.custom_category_name] = {}
 
             for category, items in state.get("selected_items", {}).items():
                 self.selected_items[category] = {}
                 self.item_instances[category] = {}
                 
                 for item_key, item_data in items.items():
-                    original_name = item_data['original_name']
+                    original_name = item_data.get('original_name', 'Unknown')
                     instance_info = item_data.get('instance_info', {})
+                    
+                    # For custom items, use item_key as item_name if original_name is missing
+                    if category == self.custom_category_name and not original_name:
+                        # Try to extract from instance_info or use a default
+                        original_name = instance_info.get('display_name', 'Custom Item')
                     
                     if original_name not in self.item_instances[category]:
                         self.item_instances[category][original_name] = []
@@ -1410,6 +1877,14 @@ class BidWriterApp:
                     item_data["location"] = tk.StringVar(value=item_data.get("location", ""))
                     item_data["add_info"] = tk.StringVar(value=item_data.get("add_info", ""))
                     item_data["conjunction_key"] = tk.StringVar(value=item_data.get("conjunction_key", ""))
+                    # Ensure is_custom flag is preserved
+                    if category == self.custom_category_name:
+                        item_data["is_custom"] = True
+                    # Preserve preview_text_content and user_edited from saved state
+                    if "preview_text_content" not in item_data:
+                        item_data["preview_text_content"] = item_data.get("preview_text_content", "")
+                    if "user_edited" not in item_data:
+                        item_data["user_edited"] = item_data.get("user_edited", False)
                     self.selected_items[category][item_key] = item_data
             
             # Load photos from saved state
@@ -1648,10 +2123,14 @@ class BidWriterApp:
         except:
             return
             
+        # For custom items, never auto-update preview if user has edited it
+        if item.get("is_custom", False) and item.get("user_edited", False):
+            return
+            
         # Check if user has manually edited the preview text
         try:
             current_text = item["preview_text"].get("1.0", tk.END).strip()
-            if hasattr(item, 'user_edited') and item['user_edited']:
+            if item.get('user_edited', False):
                 # User has manually edited, don't overwrite
                 return
         except:
@@ -1661,29 +2140,44 @@ class BidWriterApp:
         location = item["location"].get().strip() or "N/A"
         add_info = item["add_info"].get().strip()
         conjunction_key = item["conjunction_key"].get().strip().upper()
-
-        # Safe template formatting with error handling
-        try:
-            bid_text = item["template"].format(
-                quantity=qty,
-                location=location,
-                info=add_info,
-                total=total_price,
-                cause=add_info  # Use add_info as cause if needed
-            )
-        except KeyError as e:
-            # Fallback formatting if template has unexpected placeholders
+        
+        # Handle custom items - use only description from add_info (not item name, no price)
+        if item.get("is_custom", False):
+            description = add_info if add_info else ""
+            # Use simple template for custom items (no price, no item name)
             try:
-                # Try with just the basic placeholders
+                bid_text = item["template"].format(
+                    description=description,
+                    quantity=qty,
+                    location=location,
+                    info=add_info
+                )
+            except KeyError:
+                # Fallback for custom items - just the description
+                bid_text = description if description else ""
+        else:
+            # Safe template formatting with error handling for regular items
+            try:
                 bid_text = item["template"].format(
                     quantity=qty,
                     location=location,
                     info=add_info,
-                    total=total_price
+                    total=total_price,
+                    cause=add_info  # Use add_info as cause if needed
                 )
-            except:
-                # Ultimate fallback - use raw template
-                bid_text = item["template"]
+            except KeyError as e:
+                # Fallback formatting if template has unexpected placeholders
+                try:
+                    # Try with just the basic placeholders
+                    bid_text = item["template"].format(
+                        quantity=qty,
+                        location=location,
+                        info=add_info,
+                        total=total_price
+                    )
+                except:
+                    # Ultimate fallback - use raw template
+                    bid_text = item["template"]
         
         conjunction_prefix = ""
         conjunction_suffix = ""
@@ -1734,6 +2228,13 @@ class BidWriterApp:
         item = self.selected_items[category][item_key]
         item["selected"] = not item["selected"]
         
+        # For custom items, update checkbox variable
+        if item.get("is_custom", False):
+            if item.get("checkbox_var"):
+                item["checkbox_var"].set(item["selected"])
+            # The checkbox callback will handle the UI update
+            return
+        
         if item["button"]:
             item["button"].configure(bg=self.colors['selected'] if item["selected"] else self.colors['white'])
         
@@ -1755,6 +2256,15 @@ class BidWriterApp:
         """Handle text changes in the Live Preview and update generated bids if they exist."""
         # Mark this item as user-edited
         item_info['user_edited'] = True
+        
+        # Save preview text content to the item_info dict for persistence
+        if item_info.get("preview_text"):
+            try:
+                if item_info["preview_text"].winfo_exists():
+                    preview_content = item_info["preview_text"].get("1.0", tk.END).strip()
+                    item_info["preview_text_content"] = preview_content
+            except:
+                pass
         
         # Update the generated bids section if it has content
         if hasattr(self, 'output_text') and self.output_text.get("1.0", tk.END).strip():

@@ -292,6 +292,101 @@ class OnlineDatabaseManager:
             print(f"Error getting user by ID: {e}")
             return None
     
+    def is_admin(self, user_id: int) -> bool:
+        """Check if a user is an admin"""
+        try:
+            user = self.get_user_by_id(user_id)
+            if user:
+                return user.get('is_admin', False)
+            return False
+        except Exception as e:
+            print(f"Error checking admin status: {e}")
+            return False
+    
+    def get_all_users(self) -> List[Dict]:
+        """Get all users (admin only)"""
+        try:
+            result = self.supabase.table('users').select('id, username, created_at, last_login, is_admin').order('username').execute()
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Error getting all users: {e}")
+            return []
+    
+    def delete_user(self, user_id: int):
+        """Delete a user (admin only)"""
+        try:
+            self.supabase.table('users').delete().eq('id', user_id).execute()
+        except Exception as e:
+            raise Exception(f"Failed to delete user: {e}")
+    
+    def get_daily_stats(self, date: str = None) -> Dict:
+        """
+        Get daily statistics for bids and work orders
+        
+        Args:
+            date: Date in format 'YYYY-MM-DD'. If None, uses today.
+            
+        Returns:
+            Dictionary with stats: {
+                'date': date,
+                'total_bids': count,
+                'total_work_orders': count,
+                'bids_by_user': {username: count},
+                'work_orders_by_user': {username: count}
+            }
+        """
+        try:
+            from datetime import datetime, timedelta
+            if date is None:
+                date = datetime.now().strftime('%Y-%m-%d')
+            
+            # Get all bids created on this date
+            start_date = f"{date} 00:00:00"
+            end_date = f"{date} 23:59:59"
+            
+            # Get bids for the date
+            bids_result = self.supabase.table('bids').select('id, wo_number, user_id, created_by_username, created_at').gte('created_at', start_date).lte('created_at', end_date).execute()
+            
+            total_bids = len(bids_result.data) if bids_result.data else 0
+            unique_work_orders = set()
+            bids_by_user = {}
+            work_orders_by_user = {}
+            
+            for bid in (bids_result.data or []):
+                wo_number = bid.get('wo_number', '')
+                if wo_number:
+                    unique_work_orders.add(wo_number)
+                
+                username = bid.get('created_by_username', 'Unknown')
+                if not username or username == 'Unknown':
+                    # Try to get username from user_id
+                    user_id = bid.get('user_id')
+                    if user_id:
+                        user = self.get_user_by_id(user_id)
+                        if user:
+                            username = user.get('username', 'Unknown')
+                
+                bids_by_user[username] = bids_by_user.get(username, 0) + 1
+                if wo_number:
+                    work_orders_by_user[username] = work_orders_by_user.get(username, 0) + 1
+            
+            return {
+                'date': date,
+                'total_bids': total_bids,
+                'total_work_orders': len(unique_work_orders),
+                'bids_by_user': bids_by_user,
+                'work_orders_by_user': work_orders_by_user
+            }
+        except Exception as e:
+            print(f"Error getting daily stats: {e}")
+            return {
+                'date': date or datetime.now().strftime('%Y-%m-%d'),
+                'total_bids': 0,
+                'total_work_orders': 0,
+                'bids_by_user': {},
+                'work_orders_by_user': {}
+            }
+    
     def upload_bid_photos(self, wo_number: str, user_id: int, item_photos: dict) -> dict:
         """
         Upload bid photos to Supabase Storage
@@ -688,13 +783,16 @@ class OnlineDatabaseManager:
     
     # ==================== Notice Management ====================
     
-    def save_notice(self, user_id: int, title: str, content: str) -> int:
-        """Save a notice"""
+    def save_notice(self, user_id: int, title: str, content: str, category: str = 'ALL', title_color: str = '#000000', card_color: str = '#ffffff') -> int:
+        """Save a notice with category, title color, and card color"""
         try:
             result = self.supabase.table('notices').insert({
                 'user_id': user_id,
                 'title': title,
-                'content': content
+                'content': content,
+                'category': category,
+                'title_color': title_color,
+                'card_color': card_color
             }).execute()
             return result.data[0]['id'] if result.data else None
         except Exception as e:
@@ -709,10 +807,29 @@ class OnlineDatabaseManager:
             print(f"Error getting notices: {e}")
             return []
     
-    def delete_notice(self, notice_id: int, user_id: int):
-        """Delete a notice"""
+    def update_notice(self, notice_id: int, title: str, content: str, category: str = 'ALL', title_color: str = '#000000', card_color: str = '#ffffff'):
+        """Update an existing notice"""
         try:
-            self.supabase.table('notices').delete().eq('id', notice_id).eq('user_id', user_id).execute()
+            result = self.supabase.table('notices').update({
+                'title': title,
+                'content': content,
+                'category': category,
+                'title_color': title_color,
+                'card_color': card_color
+            }).eq('id', notice_id).execute()
+            return result.data[0]['id'] if result.data else None
+        except Exception as e:
+            raise Exception(f"Failed to update notice: {e}")
+    
+    def delete_notice(self, notice_id: int, user_id: int = None):
+        """Delete a notice (any user can delete)"""
+        try:
+            if user_id:
+                # Try with user_id first, but don't require it
+                self.supabase.table('notices').delete().eq('id', notice_id).execute()
+            else:
+                # Delete without user_id check
+                self.supabase.table('notices').delete().eq('id', notice_id).execute()
         except Exception as e:
             raise Exception(f"Failed to delete notice: {e}")
     
@@ -786,6 +903,85 @@ class OnlineDatabaseManager:
             self.supabase.table('approvals').delete().eq('id', approval_id).eq('user_id', user_id).execute()
         except Exception as e:
             raise Exception(f"Failed to delete approval: {e}")
+    
+    # ==================== Letterhead Files Management ====================
+    
+    def save_letterhead_file(self, user_id: int, file_data: dict) -> int:
+        """
+        Save a letterhead file entry
+        
+        Args:
+            user_id: User ID who uploaded the file
+            file_data: Dictionary with:
+                - category: 'Estimate' or 'Invoice'
+                - title: Display title for the file
+                - file_name: Original filename
+                - file_path: Path in Supabase Storage
+                - uploaded_by_username: Username of uploader
+                
+        Returns:
+            File ID
+        """
+        try:
+            file_record = {
+                'user_id': user_id,
+                'category': file_data.get('category'),
+                'title': file_data.get('title'),
+                'file_name': file_data.get('file_name'),
+                'file_path': file_data.get('file_path'),
+                'uploaded_by_username': file_data.get('uploaded_by_username')
+            }
+            
+            print(f"[save_letterhead_file] Inserting record: {file_record}")
+            result = self.supabase.table('letterhead_files').insert(file_record).execute()
+            print(f"[save_letterhead_file] Insert result: {result.data}")
+            return result.data[0]['id'] if result.data else None
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[save_letterhead_file] Error: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            raise Exception(f"Failed to save letterhead file: {e}")
+    
+    def get_letterhead_files(self, category: str = None) -> List[Dict]:
+        """
+        Get all letterhead files, optionally filtered by category
+        
+        Args:
+            category: 'Estimate' or 'Invoice' (optional, None for all)
+            
+        Returns:
+            List of file dictionaries
+        """
+        try:
+            query = self.supabase.table('letterhead_files').select('*')
+            if category:
+                query = query.eq('category', category)
+            result = query.order('created_at', desc=True).execute()
+            print(f"[get_letterhead_files] Query for category '{category}': Found {len(result.data) if result.data else 0} files")
+            return result.data if result.data else []
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[get_letterhead_files] Error: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def delete_letterhead_file(self, file_id: int, user_id: int = None):
+        """
+        Delete a letterhead file entry
+        
+        Args:
+            file_id: ID of the file to delete
+            user_id: Optional user ID for verification
+        """
+        try:
+            query = self.supabase.table('letterhead_files').delete().eq('id', file_id)
+            if user_id:
+                query = query.eq('user_id', user_id)
+            query.execute()
+        except Exception as e:
+            raise Exception(f"Failed to delete letterhead file: {e}")
     
     # ==================== WO Inspections Management ====================
     

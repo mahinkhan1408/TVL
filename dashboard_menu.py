@@ -28,6 +28,7 @@ import threading
 from datetime import datetime
 import json
 import shutil
+import tempfile
 
 class DashboardMenu:
     def __init__(self, root, username):
@@ -45,6 +46,7 @@ class DashboardMenu:
         # Initialize asynchronously to prevent blocking UI
         self.db = None
         self.user_id = None
+        self.is_admin_user = False
         
         # Register for theme updates
         theme_manager.register_theme_callback(self.on_theme_changed)
@@ -106,6 +108,11 @@ class DashboardMenu:
                     try:
                         self.db = db
                         self.user_id = user_id
+                        # Check if user is admin
+                        if db and user_id:
+                            self.is_admin_user = db.is_admin(user_id)
+                        else:
+                            self.is_admin_user = False
                     except Exception as e:
                         print(f"Error updating database reference: {e}")
                 
@@ -236,14 +243,13 @@ class DashboardMenu:
             grid.grid_columnconfigure(i, weight=1, uniform='col')
 
         # Card definitions in requested serial
-        # New bid, Open project, Templates, GC/Roof CE, Vendor Price, Letterheads,
+        # New bid, Open project, GC/Roof CE, Price Sheet, Letterheads,
         # Notice Boards, To-Do, Photo Viewer, Approval, WO Inspection, Settings
         cards = [
             ("New Bid", "Create a new bid", "🆕", self.create_new_bid),
             ("Open Project", "Continue your saved work", "📂", self.show_bid_writer_dashboard),
-            ("Templates", "Bid templates", "📄", lambda: self.show_placeholder("Templates")),
             ("GC/Roof CE", "GC/Roof change orders", "🏗️", self.open_gc_roof_ce),
-            ("Vendor Price", "Vendor pricing", "💲", self.open_vendor_price),
+            ("Price Sheet", "Client and Vendor", "💲", self.show_price_sheet_page),
             ("Letterheads", "Letterhead bids", "📝", self.open_letterhead_bid),
             ("Notice Boards", "Announcements", "📢", self.open_notice_board),
             ("To-Do", "Tasks & reminders", "✅", self.open_todo),
@@ -252,6 +258,10 @@ class DashboardMenu:
             ("WO Inspection", "Work order inspections", "🔍", self.open_wo_inspection),
             ("Settings", "Preferences", "⚙️", self.show_settings),
         ]
+        
+        # Add Admin card if user is admin (placed before Settings)
+        if self.is_admin_user:
+            cards.insert(-1, ("Admin", "User management & analytics", "👤", self.open_admin))
 
         # Create cards in a neat grid (up to 4 columns per row)
         row, col = 0, 0
@@ -289,22 +299,15 @@ class DashboardMenu:
         recent_header_frame = tk.Frame(recent_frame, bg=self.colors['gray_light'])
         recent_header_frame.pack(fill='x')
         
-        # Left side: Title and Bulk Delete button
-        title_action_frame = tk.Frame(recent_header_frame, bg=self.colors['gray_light'])
-        title_action_frame.pack(side='left', anchor='w', pady=(0, 10), fill='x', expand=False)
+        # Left side: Title and Search bar
+        left_frame = tk.Frame(recent_header_frame, bg=self.colors['gray_light'])
+        left_frame.pack(side='left', anchor='w', pady=(0, 10))
         
-        tk.Label(title_action_frame, text="Recent Projects", font=("Arial", 14, "bold"), bg=self.colors['gray_light'], fg=self.colors['primary_blue'], anchor='w', justify='left').pack(side='left', anchor='w', padx=(0, 0))
+        tk.Label(left_frame, text="Recent Projects", font=("Arial", 14, "bold"), bg=self.colors['gray_light'], fg=self.colors['primary_blue'], anchor='w', justify='left').pack(side='left', anchor='w', padx=(0, 15))
         
-        # Bulk Delete button
-        self.bulk_delete_button = tk.Button(title_action_frame, text="Delete Selected", command=self.delete_selected_bids, font=("Arial", 10, "bold"), bg='#dc3545', fg='white', relief='flat', cursor="hand2", state='disabled', padx=10, pady=5)
-        self.bulk_delete_button.pack(side='left', padx=(15, 0))
-        
-        # Dictionary to store selected checkboxes {wo_number: checkbox_var}
-        self.selected_bids = {}
-        
-        # Search bar with filter dropdown
-        search_frame = tk.Frame(recent_header_frame, bg=self.colors['gray_light'])
-        search_frame.pack(side='right', pady=(0, 10))
+        # Search bar with filter dropdown (on the left)
+        search_frame = tk.Frame(left_frame, bg=self.colors['gray_light'])
+        search_frame.pack(side='left', pady=(0, 10))
         
         search_label = tk.Label(search_frame, text="Search:", font=("Arial", 10), bg=self.colors['gray_light'])
         search_label.pack(side='left', padx=(0, 5))
@@ -323,6 +326,21 @@ class DashboardMenu:
         
         clear_search_button = tk.Button(search_frame, text="Clear", command=lambda: [self.search_entry.delete(0, tk.END), self.search_filter.set("all"), self.load_recent_bids()], font=("Arial", 10), bg=self.colors['gray_medium'], fg="white", relief="flat", cursor="hand2")
         clear_search_button.pack(side='left')
+        
+        # Dictionary to store selected checkboxes {wo_number: checkbox_var}
+        self.selected_bids = {}
+        
+        # Right side: Action buttons (small buttons)
+        buttons_frame = tk.Frame(recent_header_frame, bg=self.colors['gray_light'])
+        buttons_frame.pack(side='right', anchor='e', pady=(0, 10))
+        
+        # Delete Selected button (small)
+        self.bulk_delete_button = tk.Button(buttons_frame, text="Delete Selected", command=self.delete_selected_bids, font=("Arial", 9), bg='#dc3545', fg='white', relief='flat', cursor="hand2", state='disabled', padx=8, pady=4)
+        self.bulk_delete_button.pack(side='right', padx=(5, 0))
+        
+        # Export Selected button (small)
+        self.bulk_export_button = tk.Button(buttons_frame, text="Export Selected", command=self.export_selected_bids, font=("Arial", 9), bg=self.colors['primary_blue'], fg='white', relief='flat', cursor="hand2", state='disabled', padx=8, pady=4)
+        self.bulk_export_button.pack(side='right', padx=(0, 0))
 
 
         # Scrollable list for recent bids
@@ -360,6 +378,8 @@ class DashboardMenu:
         self.selected_bids = {}
         if hasattr(self, 'bulk_delete_button'):
             self.bulk_delete_button.config(state='disabled')
+        if hasattr(self, 'bulk_export_button'):
+            self.bulk_export_button.config(state='disabled')
         if hasattr(self, 'select_all_var'):
             self.select_all_var.set(False)
 
@@ -546,13 +566,21 @@ class DashboardMenu:
                     time_label.grid(row=0, column=7, sticky='nsew')
                     time_label.bind("<Button-1>", make_label_click_handler(wo_number))
                     
-                    # Delete button
-                    delete_button = tk.Button(row_frame, text="Delete", command=lambda wo=wo_number: self.delete_bid_state(wo), font=("Arial", 9), bg='#dc3545', fg='white', relief='flat', padx=8, pady=5)
+                    # Delete button (smaller size)
+                    delete_button = tk.Button(row_frame, text="Delete", command=lambda wo=wo_number: self.delete_bid_state(wo), font=("Arial", 8), bg='#dc3545', fg='white', relief='flat', padx=4, pady=3)
                     delete_button.grid(row=0, column=8, sticky='nsew')
 
-                    # Export button
-                    export_button = tk.Button(row_frame, text="Export", command=lambda wo=wo_number: self.export_bid_state(wo), font=("Arial", 9), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=8, pady=5)
-                    export_button.grid(row=0, column=9, sticky='nsew')
+                    # Docs1 and Docs2 buttons container (replaces Export button)
+                    docs_frame = tk.Frame(row_frame, bg=self.colors['white'])
+                    docs_frame.grid(row=0, column=9, sticky='nsew')
+                    
+                    # Docs1 button (small)
+                    docs1_button = tk.Button(docs_frame, text="Docs1", command=lambda wo=wo_number: self.export_to_docs1(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
+                    docs1_button.pack(side='left', fill='both', expand=True, padx=1)
+                    
+                    # Docs2 button (small)
+                    docs2_button = tk.Button(docs_frame, text="Docs2", command=lambda wo=wo_number: self.export_to_docs2(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
+                    docs2_button.pack(side='left', fill='both', expand=True, padx=1)
                     
                     # Bind the entire row to open the bid
                     def make_open_handler(wo):
@@ -642,13 +670,21 @@ class DashboardMenu:
                     time_label.grid(row=0, column=7, sticky='nsew')
                     time_label.bind("<Button-1>", make_label_click_handler(wo_number))
                     
-                    # Delete button
-                    delete_button = tk.Button(row_frame, text="Delete", command=lambda wo=wo_number: self.delete_bid_state(wo), font=("Arial", 9), bg='#dc3545', fg='white', relief='flat', padx=8, pady=5)
+                    # Delete button (smaller size)
+                    delete_button = tk.Button(row_frame, text="Delete", command=lambda wo=wo_number: self.delete_bid_state(wo), font=("Arial", 8), bg='#dc3545', fg='white', relief='flat', padx=4, pady=3)
                     delete_button.grid(row=0, column=8, sticky='nsew')
 
-                    # Export button
-                    export_button = tk.Button(row_frame, text="Export", command=lambda wo=wo_number: self.export_bid_state(wo), font=("Arial", 9), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=8, pady=5)
-                    export_button.grid(row=0, column=9, sticky='nsew')
+                    # Docs1 and Docs2 buttons container (replaces Export button)
+                    docs_frame = tk.Frame(row_frame, bg=self.colors['white'])
+                    docs_frame.grid(row=0, column=9, sticky='nsew')
+                    
+                    # Docs1 button (small)
+                    docs1_button = tk.Button(docs_frame, text="Docs1", command=lambda wo=wo_number: self.export_to_docs1(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
+                    docs1_button.pack(side='left', fill='both', expand=True, padx=1)
+                    
+                    # Docs2 button (small)
+                    docs2_button = tk.Button(docs_frame, text="Docs2", command=lambda wo=wo_number: self.export_to_docs2(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
+                    docs2_button.pack(side='left', fill='both', expand=True, padx=1)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load recent projects: {e}")
@@ -730,13 +766,18 @@ class DashboardMenu:
         self.update_bulk_delete_button_state()
     
     def update_bulk_delete_button_state(self):
-        """Update the bulk delete button state based on selected items"""
+        """Update the bulk delete and export buttons state based on selected items"""
+        selected_count = sum(1 for var in self.selected_bids.values() if var.get())
         if hasattr(self, 'bulk_delete_button'):
-            selected_count = sum(1 for var in self.selected_bids.values() if var.get())
             if selected_count > 0:
                 self.bulk_delete_button.config(state='normal', text=f"Delete Selected ({selected_count})")
             else:
                 self.bulk_delete_button.config(state='disabled', text="Delete Selected")
+        if hasattr(self, 'bulk_export_button'):
+            if selected_count > 0:
+                self.bulk_export_button.config(state='normal', text=f"Export Selected ({selected_count})")
+            else:
+                self.bulk_export_button.config(state='disabled', text="Export Selected")
     
     def delete_selected_bids(self):
         """Delete all selected bids"""
@@ -787,7 +828,7 @@ class DashboardMenu:
             self.load_recent_bids()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to delete selected bids: {e}")
-    
+
     def delete_bid_state(self, wo_number):
         if messagebox.askyesno("Confirm Delete", f"Are you sure you want to permanently delete the bid for WO# {wo_number}?"):
             try:
@@ -807,35 +848,407 @@ class DashboardMenu:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete bid: {e}")
 
-    def export_bid_state(self, wo_number):
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON File", "*.json"), ("All Files", "*.*")],
-            initialfile=f"WO_{wo_number}.json",
-            title="Export Bid State"
-        )
+    def export_to_docs1(self, wo_number):
+        """Generate Docs1 format Word document for a bid"""
+        try:
+            # Load bid data
+            property_address = None
+            client_code = None
+            wo_type = None
+            bid_user_id = self.user_id
+            
+            if self.db:
+                try:
+                    bid_data = self.db.load_bid(wo_number, self.user_id, all_users=True)
+                    if not bid_data:
+                        messagebox.showerror("Error", f"Could not find project with Work Order: {wo_number}")
+                        return
+                    property_address = bid_data.get('property_address')
+                    client_code = bid_data.get('client_code')
+                    wo_type = bid_data.get('wo_type')
+                    bid_user_id = bid_data.get('user_id', self.user_id)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to load project data: {e}")
+                    return
+            
+            # Create a hidden window for BidWriterApp
+            hidden_window = tk.Toplevel(self.root)
+            hidden_window.withdraw()  # Hide the window immediately
+            
+            # Create BidWriterApp instance - it will load state automatically
+            bid_writer = BidWriterApp(hidden_window, self.username, wo_number, 
+                                     property_address=property_address, 
+                                     user_id=bid_user_id, 
+                                     client_code=client_code, 
+                                     wo_type=wo_type,
+                                     on_save_callback=None)
+            
+            # Wait for state to load (BidWriterApp loads state in __init__ if wo_number_to_load is provided)
+            hidden_window.update_idletasks()
+            time.sleep(0.3)  # Give it time to load state and initialize UI
+            
+            # Call save_to_docs1
+            bid_writer.save_to_docs1()
+            
+            # Clean up
+            hidden_window.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate Docs1: {e}")
+    
+    def export_to_docs2(self, wo_number):
+        """Generate Docs2 format Word document for a bid"""
+        try:
+            # Load bid data
+            property_address = None
+            client_code = None
+            wo_type = None
+            bid_user_id = self.user_id
+            
+            if self.db:
+                try:
+                    bid_data = self.db.load_bid(wo_number, self.user_id, all_users=True)
+                    if not bid_data:
+                        messagebox.showerror("Error", f"Could not find project with Work Order: {wo_number}")
+                        return
+                    property_address = bid_data.get('property_address')
+                    client_code = bid_data.get('client_code')
+                    wo_type = bid_data.get('wo_type')
+                    bid_user_id = bid_data.get('user_id', self.user_id)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to load project data: {e}")
+                    return
+            
+            # Create a hidden window for BidWriterApp
+            hidden_window = tk.Toplevel(self.root)
+            hidden_window.withdraw()  # Hide the window immediately
+            
+            # Create BidWriterApp instance - it will load state automatically
+            bid_writer = BidWriterApp(hidden_window, self.username, wo_number, 
+                                     property_address=property_address, 
+                                     user_id=bid_user_id, 
+                                     client_code=client_code, 
+                                     wo_type=wo_type,
+                                     on_save_callback=None)
+            
+            # Wait for state to load (BidWriterApp loads state in __init__ if wo_number_to_load is provided)
+            hidden_window.update_idletasks()
+            time.sleep(0.3)  # Give it time to load state and initialize UI
+            
+            # Call save_to_docs2
+            bid_writer.save_to_docs2()
+            
+            # Clean up
+            hidden_window.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate Docs2: {e}")
+    
+    def export_selected_bids(self):
+        """Export all selected bids to a single Word document in Docs2 format"""
+        selected_wo_numbers = [wo_number for wo_number, var in self.selected_bids.items() if var.get()]
         
-        if file_path:
+        if not selected_wo_numbers:
+            messagebox.showwarning("No Selection", "Please select at least one project to export.")
+            return
+        
+        try:
             try:
-                if self.db and self.user_id:
-                    # Load from Supabase and save to file
-                    bid_data = self.db.load_bid(wo_number, self.user_id)
-                    if bid_data:
-                        with open(file_path, 'w') as f:
-                            json.dump(bid_data, f, indent=4)
-                        messagebox.showinfo("Success", f"Bid for WO# {wo_number} exported successfully to:\n{file_path}")
-                    else:
-                        messagebox.showerror("Error", f"Bid for WO# {wo_number} not found in database.")
-                else:
-                    # Fallback to local file
-                    source_path = os.path.join(self.app_data_dir, f"WO_{wo_number}.json")
-                    if os.path.exists(source_path):
-                        shutil.copyfile(source_path, file_path)
-                        messagebox.showinfo("Success", f"Bid for WO# {wo_number} exported successfully to:\n{file_path}")
-                    else:
-                        messagebox.showerror("Error", f"File for WO# {wo_number} not found.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to export file: {e}")
+                from docx import Document
+                from docx.shared import Inches
+                from docx.enum.text import WD_ALIGN_PARAGRAPH
+                import tempfile
+                use_docx = True
+            except ImportError:
+                use_docx = False
+                messagebox.showinfo("Info", "python-docx not found. Please install it to export documents.\nInstall: pip install python-docx")
+                return
+            
+            if use_docx:
+                doc = Document()
+                
+                # Title
+                doc.add_heading("Techvengers Bid Proposal - Multiple Projects", 0)
+                doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                doc.add_paragraph()
+                
+                all_bid_items = []  # List to collect all bids from all projects
+                project_info_list = []  # List to store project info for each WO
+                
+                # Process each selected WO
+                for wo_number in selected_wo_numbers:
+                    try:
+                        # Load bid data
+                        property_address = None
+                        client_code = None
+                        wo_type = None
+                        bid_user_id = self.user_id
+                        created_at = None
+                        updated_at = None
+                        processor_name = self.username
+                        
+                        if self.db:
+                            try:
+                                bid_data = self.db.load_bid(wo_number, self.user_id, all_users=True)
+                                if bid_data:
+                                    property_address = bid_data.get('property_address', '')
+                                    client_code = bid_data.get('client_code', '')
+                                    wo_type = bid_data.get('wo_type', '')
+                                    bid_user_id = bid_data.get('user_id', self.user_id)
+                                    created_at = bid_data.get('created_at', '')
+                                    updated_at = bid_data.get('updated_at', '')
+                                    # Get processor name from created_by_username if available
+                                    processor_name = bid_data.get('created_by_username', self.username)
+                                    
+                                    # Store project info
+                                    project_info_list.append({
+                                        'wo_number': wo_number,
+                                        'property_address': property_address or 'N/A',
+                                        'client_code': client_code or 'N/A',
+                                        'wo_type': wo_type or 'N/A',
+                                        'created_at': created_at,
+                                        'updated_at': updated_at,
+                                        'processor_name': processor_name or 'N/A'
+                                    })
+                                    
+                                    # Create hidden BidWriterApp to extract bids
+                                    hidden_window = tk.Toplevel(self.root)
+                                    hidden_window.withdraw()
+                                    
+                                    bid_writer = BidWriterApp(hidden_window, processor_name or self.username, wo_number, 
+                                                             property_address=property_address, 
+                                                             user_id=bid_user_id, 
+                                                             client_code=client_code, 
+                                                             wo_type=wo_type,
+                                                             on_save_callback=None)
+                                    
+                                    hidden_window.update_idletasks()
+                                    time.sleep(0.3)
+                                    
+                                    # Extract bids from this project
+                                    if hasattr(bid_writer, 'selected_items') and bid_writer.selected_items:
+                                        # Process all selected items
+                                        conjunction_groups = {}
+                                        standalone_bids = []
+                                        
+                                        for category, category_items in bid_writer.selected_items.items():
+                                            for item in category_items.values():
+                                                if item.get("selected", False):
+                                                    conjunction_key = item.get("conjunction_key", tk.StringVar()).get().strip().upper() if hasattr(item.get("conjunction_key"), 'get') else ""
+                                                    if conjunction_key:
+                                                        if conjunction_key not in conjunction_groups:
+                                                            conjunction_groups[conjunction_key] = []
+                                                        conjunction_groups[conjunction_key].append(item)
+                                                    else:
+                                                        standalone_bids.append(item)
+                                        
+                                        # Sort and combine
+                                        all_items_for_wo = []
+                                        for key in sorted(conjunction_groups.keys()):
+                                            all_items_for_wo.extend(sorted(conjunction_groups[key], key=lambda x: x.get('instance_info', {}).get('key', '')))
+                                        all_items_for_wo.extend(sorted(standalone_bids, key=lambda x: x.get('instance_info', {}).get('key', '')))
+                                        
+                                        # Extract bid data for each item
+                                        for item in all_items_for_wo:
+                                            try:
+                                                # Get bid text
+                                                bid_text, _ = bid_writer._get_item_bid_data(item)
+                                                bid_text_without_price = bid_writer._extract_bid_text_without_price(bid_text)
+                                                if not bid_text_without_price:
+                                                    bid_text_without_price = bid_text
+                                                
+                                                # Calculate price
+                                                total_price = bid_writer._calculate_item_price(item)
+                                                
+                                                # Get photo
+                                                instance_key = item.get('instance_info', {}).get('key', '')
+                                                category_name = next((cat for cat, items in bid_writer.selected_items.items() if instance_key in items), '')
+                                                photo_key = f"{category_name}_{instance_key}"
+                                                photo_data = None
+                                                if hasattr(bid_writer, 'item_photos') and photo_key in bid_writer.item_photos:
+                                                    photo_data = bid_writer.item_photos[photo_key]
+                                                
+                                                all_bid_items.append({
+                                                    'wo_number': wo_number,
+                                                    'text': bid_text_without_price,
+                                                    'price': total_price,
+                                                    'photo': photo_data
+                                                })
+                                            except Exception as e:
+                                                print(f"Error processing item for WO {wo_number}: {e}")
+                                                continue
+                                    
+                                    hidden_window.destroy()
+                            except Exception as e:
+                                print(f"Error loading bid for WO {wo_number}: {e}")
+                                continue
+                    
+                    except Exception as e:
+                        print(f"Error processing WO {wo_number}: {e}")
+                        continue
+                
+                if not all_bid_items:
+                    messagebox.showwarning("No Bids", "No bids found in the selected projects.")
+                    return
+                
+                # Add project information section for each project, followed by its bids
+                global_bid_number = 1
+                for i, proj_info in enumerate(project_info_list, 1):
+                    if i > 1:
+                        doc.add_page_break()
+                    
+                    # Project heading
+                    doc.add_heading(f"Project {i}: WO# {proj_info['wo_number']}", level=1)
+                    doc.add_paragraph()
+                    
+                    # Project Information Table
+                    info_table = doc.add_table(rows=4, cols=2)
+                    info_table.style = 'Table Grid'
+                    info_table.columns[0].width = Inches(2.0)
+                    info_table.columns[1].width = Inches(5.0)
+                    
+                    info_table.rows[0].cells[0].paragraphs[0].clear()
+                    run1 = info_table.rows[0].cells[0].paragraphs[0].add_run("Work Order (WO):")
+                    run1.bold = True
+                    info_table.rows[0].cells[1].text = proj_info['wo_number']
+                    
+                    info_table.rows[1].cells[0].paragraphs[0].clear()
+                    run1 = info_table.rows[1].cells[0].paragraphs[0].add_run("Property Address:")
+                    run1.bold = True
+                    info_table.rows[1].cells[1].text = proj_info['property_address']
+                    
+                    info_table.rows[2].cells[0].paragraphs[0].clear()
+                    run1 = info_table.rows[2].cells[0].paragraphs[0].add_run("Work Order Type:")
+                    run1.bold = True
+                    info_table.rows[2].cells[1].text = proj_info['wo_type']
+                    
+                    info_table.rows[3].cells[0].paragraphs[0].clear()
+                    run1 = info_table.rows[3].cells[0].paragraphs[0].add_run("Client Code:")
+                    run1.bold = True
+                    info_table.rows[3].cells[1].text = proj_info['client_code']
+                    
+                    doc.add_paragraph()
+                    
+                    # Dates and Processor Table
+                    dates_table = doc.add_table(rows=3, cols=2)
+                    dates_table.style = 'Table Grid'
+                    dates_table.columns[0].width = Inches(2.5)
+                    dates_table.columns[1].width = Inches(4.5)
+                    
+                    dates_table.rows[0].cells[0].paragraphs[0].clear()
+                    run1 = dates_table.rows[0].cells[0].paragraphs[0].add_run("Project Creation Date:")
+                    run1.bold = True
+                    # Format date
+                    try:
+                        if proj_info['created_at'] and 'T' in str(proj_info['created_at']):
+                            date_str = str(proj_info['created_at']).split('T')[0]
+                            dt = datetime.strptime(date_str, '%Y-%m-%d')
+                            formatted_date = dt.strftime('%b %d, %Y')
+                        else:
+                            formatted_date = str(proj_info['created_at']) if proj_info['created_at'] else 'N/A'
+                    except:
+                        formatted_date = str(proj_info['created_at']) if proj_info['created_at'] else 'N/A'
+                    dates_table.rows[0].cells[1].text = formatted_date
+                    
+                    dates_table.rows[1].cells[0].paragraphs[0].clear()
+                    run1 = dates_table.rows[1].cells[0].paragraphs[0].add_run("Project Last Modification Date:")
+                    run1.bold = True
+                    # Format date
+                    try:
+                        if proj_info['updated_at'] and 'T' in str(proj_info['updated_at']):
+                            date_str = str(proj_info['updated_at']).split('T')[0]
+                            dt = datetime.strptime(date_str, '%Y-%m-%d')
+                            formatted_date = dt.strftime('%b %d, %Y')
+                        else:
+                            formatted_date = str(proj_info['updated_at']) if proj_info['updated_at'] else 'N/A'
+                    except:
+                        formatted_date = str(proj_info['updated_at']) if proj_info['updated_at'] else 'N/A'
+                    dates_table.rows[1].cells[1].text = formatted_date
+                    
+                    dates_table.rows[2].cells[0].paragraphs[0].clear()
+                    run1 = dates_table.rows[2].cells[0].paragraphs[0].add_run("Processor Name:")
+                    run1.bold = True
+                    dates_table.rows[2].cells[1].text = proj_info['processor_name']
+                    
+                    doc.add_paragraph()
+                    
+                    # Get bids for this WO
+                    wo_bids = [bid for bid in all_bid_items if bid['wo_number'] == proj_info['wo_number']]
+                    
+                    # Summary Section
+                    total_items = len(wo_bids)
+                    summary_para1 = doc.add_paragraph()
+                    summary_para1.add_run("Summary: ").bold = True
+                    summary_para1.add_run(f"Total Bid Count: {total_items}")
+                    
+                    doc.add_paragraph()
+                    
+                    # Add bids for this project in Docs2 format (text -> price -> photo)
+                    for bid_item in wo_bids:
+                        # Add bid number and text
+                        bid_paragraph = doc.add_paragraph()
+                        bid_paragraph.add_run(f"{global_bid_number}. {bid_item['text']}").bold = False
+                        
+                        # Add price below bid text
+                        price_paragraph = doc.add_paragraph()
+                        price_run = price_paragraph.add_run(f"Price ${bid_item['price']:.2f}")
+                        price_run.bold = True
+                        
+                        # Add photo below price if available
+                        if bid_item['photo'] and bid_item['photo'].get('original'):
+                            try:
+                                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                                    temp_path = temp_file.name
+                                    bid_item['photo']['original'].save(temp_path)
+                                
+                                photo_paragraph = doc.add_paragraph()
+                                photo_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                                photo_paragraph.add_run().add_picture(temp_path, width=Inches(4.0))
+                                
+                                os.remove(temp_path)
+                            except Exception as e:
+                                print(f"Error adding image: {e}")
+                                error_para = doc.add_paragraph()
+                                error_para.add_run("Error loading image").italic = True
+                        
+                        # Add spacing between items
+                        doc.add_paragraph()
+                        global_bid_number += 1
+                
+                doc.add_paragraph()
+                footer = doc.add_paragraph('Generated by Techvengers Bid Writer')
+                footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                footer_run = footer.runs[0]
+                footer_run.italic = True
+                
+                # Generate filename
+                date_str = datetime.now().strftime("%d%b")
+                default_filename = f"Bids_MultipleProjects_{date_str}.docx"
+                
+                file_path = filedialog.asksaveasfilename(
+                    defaultextension=".docx",
+                    filetypes=[("Word Document", "*.docx"), ("All Files", "*.*")],
+                    initialfile=default_filename,
+                    title="Save Combined Bids Document (Docs2 Format)"
+                )
+                
+                if file_path:
+                    doc.save(file_path)
+                    messagebox.showinfo("Success", f"Combined bids saved successfully to:\n{file_path}")
+                    
+                    if messagebox.askyesno("Open File", "Would you like to open the saved document?"):
+                        try:
+                            if os.name == 'nt':
+                                os.startfile(file_path)
+                            elif sys.platform == 'darwin':
+                                os.system(f'open "{file_path}"')
+                            else:
+                                os.system(f'xdg-open "{file_path}"')
+                        except Exception as e:
+                            messagebox.showinfo("File Saved", f"Document saved successfully!\nLocation: {file_path}")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export selected bids: {e}")
+            import traceback
+            traceback.print_exc()
 
     def create_new_bid(self):
         """Show dialog to get Work Order, Property Address, Client Code, and WO Type, then open bid writer"""
@@ -1062,12 +1475,87 @@ class DashboardMenu:
             messagebox.showerror("Error", f"Failed to open project:\n{error_msg}")
 
     def open_letterhead_bid(self): 
-        new_window = tk.Toplevel(self.root)
-        LetterheadBidModule(new_window)
+        self.clear_content_frame()
+        letterhead_frame = tk.Frame(self.main_content_frame, bg=self.colors['background'], padx=20, pady=20)
+        letterhead_frame.pack(fill="both", expand=True)
+        
+        # Back to Dashboard bar
+        self._add_back_bar(letterhead_frame, "Letterheads")
+        
+        # Create LetterheadBidModule in the frame
+        LetterheadBidModule(letterhead_frame, username=self.username, user_id=self.user_id if hasattr(self, 'user_id') else None)
 
     def open_notice_board(self):
+        """Display notice board in main content frame"""
+        self.clear_content_frame()
+        notice_frame = tk.Frame(self.main_content_frame, bg=self.colors['background'], padx=20, pady=20)
+        notice_frame.pack(fill="both", expand=True)
+        
+        # Back to Dashboard bar
+        self._add_back_bar(notice_frame, "Notice Board")
+        
+        # Create NoticeBoardModule in the frame
+        NoticeBoardModule(notice_frame, username=self.username, user_id=self.user_id if hasattr(self, 'user_id') else None, colors=self.colors)
+
+    def show_price_sheet_page(self):
+        """Display the Price Sheet page with 3 cards"""
+        self.clear_content_frame()
+        price_sheet_frame = tk.Frame(self.main_content_frame, bg=self.colors['background'], padx=20, pady=20)
+        price_sheet_frame.pack(fill="both", expand=True)
+        
+        # Back to Dashboard bar
+        self._add_back_bar(price_sheet_frame, "Price Sheet")
+        
+        # Header
+        header_frame = tk.Frame(price_sheet_frame, bg=self.colors['background'])
+        header_frame.pack(fill='x', pady=(0, 20))
+        tk.Label(header_frame, text="Price Sheet", font=("Arial", 24, "bold"), 
+                fg=self.colors['primary_blue'], bg=self.colors['background']).pack(side='left')
+        
+        # Cards grid container - similar to dashboard layout
+        cards_wrap = tk.Frame(price_sheet_frame, bg=self.colors['background'])
+        cards_wrap.pack(fill='both', expand=True, padx=20, pady=(5, 20))
+        
+        grid = tk.Frame(cards_wrap, bg=self.colors['background'])
+        grid.pack(fill='both', expand=True)
+        # Use 4 columns to match dashboard card size
+        for i in range(4):
+            grid.grid_columnconfigure(i, weight=1, uniform='col')
+        
+        # Define the 3 price sheet cards
+        price_sheet_cards = [
+            ("Vendor Price", "Vendor pricing information", "💲", self.open_vendor_price_module),
+            ("Special Contractor Price", "Special contractor pricing", "👷", self.open_special_contractor_price),
+            ("Client Allowables", "Client allowables pricing", "💰", self.open_client_allowables),
+        ]
+        
+        # Create cards in a grid (using 4 columns to match dashboard card size)
+        # Cards will be placed in columns 0, 1, 2 to maintain same size as dashboard cards
+        row, col = 0, 0
+        for title, subtitle, icon, cmd in price_sheet_cards:
+            self._create_dashboard_card(grid, row, col, icon, title, subtitle, cmd)
+            col += 1
+            if col >= 4:
+                col = 0
+                row += 1
+        
+        # Add empty rows below to match dashboard layout (3 rows total)
+        # This ensures the cards don't expand vertically like they would with just 1 row
+        for empty_row in range(1, 3):
+            grid.grid_rowconfigure(empty_row, weight=1)
+
+    def open_vendor_price_module(self):
+        """Open Vendor Price module in a new window"""
         new_window = tk.Toplevel(self.root)
-        NoticeBoardModule(new_window)
+        VendorPriceModule(new_window)
+
+    def open_special_contractor_price(self):
+        """Open Special Contractor Price module (placeholder)"""
+        messagebox.showinfo("Coming Soon", "Special Contractor Price module is coming soon.")
+
+    def open_client_allowables(self):
+        """Open Client Allowables module (placeholder)"""
+        messagebox.showinfo("Coming Soon", "Client Allowables module is coming soon.")
 
     def open_vendor_price(self):
         new_window = tk.Toplevel(self.root)
@@ -1109,6 +1597,32 @@ class DashboardMenu:
         
         # Create WOInspectionModule in the frame
         WOInspectionModule(wo_inspection_frame, username=self.username, user_id=self.user_id if hasattr(self, 'user_id') else None)
+
+    def open_admin(self):
+        """Open admin module"""
+        if not self.db or not self.user_id:
+            messagebox.showerror("Error", "Database connection not available.")
+            return
+        
+        if not self.db.is_admin(self.user_id):
+            messagebox.showerror("Access Denied", "You do not have admin privileges.")
+            return
+        
+        self.clear_content_frame()
+        container = tk.Frame(self.main_content_frame, bg=self.colors['background'])
+        container.pack(fill='both', expand=True)
+        
+        # Back bar
+        self._add_back_bar(container, "Admin")
+        
+        # Admin module
+        try:
+            from admin_module import AdminModule
+            AdminModule(container, self.db, self.user_id, self.username, self.colors)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open admin module: {e}")
+            import traceback
+            traceback.print_exc()
 
     def show_settings(self):
         """Show the settings page with theme options."""
