@@ -61,7 +61,7 @@ class FastImageViewer:
         
         # --- SHAPE MARKING STATE ---
         self.shape_mode_active = False
-        self.current_shape_type = None  # "square", "circle", "triangle"
+        self.current_shape_type = None  # "square", "circle", "line"
         self.shape_start_coord = None
         self.current_shape_item = None
         self.shapes_cache = {}  # Store shapes separately from marks
@@ -104,65 +104,22 @@ class FastImageViewer:
         
         # --- Define ALL Button Styles via ttk.Style.configure ---
         
-        # 1. Base TButton Style (for navigation, zoom, and disabled state)
-        style.configure("TButton", font=('Inter', 11, 'bold'), background="#3498db", foreground="white", relief="flat", padding=[8, 5]) 
+        # 1. Base TButton Style (for navigation, zoom, and disabled state) - Smaller buttons
+        style.configure("TButton", font=('Inter', 9), background="#3498db", foreground="white", relief="flat", padding=[4, 2]) 
         style.map("TButton", background=[('active', '#2980b9'), ('disabled', '#7f8c8d')], foreground=[('disabled', '#bdc3c7')])
         
         # 2. Marker Button Styles
-        style.configure("Marker.Off.TButton", background="#95a5a6", foreground="white", padding=[8, 5]) 
-        style.configure("Marker.On.TButton", background="#e74c3c", foreground="white", padding=[8, 5])  
+        style.configure("Marker.Off.TButton", background="#95a5a6", foreground="white", padding=[4, 2]) 
+        style.configure("Marker.On.TButton", background="#e74c3c", foreground="white", padding=[4, 2])  
         
         # 3. Save Button Styles
-        style.configure("Save.Enabled.TButton", background="#27ae60", foreground="white", padding=[8, 5]) 
-        style.configure("Save.Disabled.TButton", background="#3498db", foreground="white", padding=[8, 5]) 
+        style.configure("Save.Enabled.TButton", background="#27ae60", foreground="white", padding=[4, 2]) 
+        style.configure("Save.Disabled.TButton", background="#3498db", foreground="white", padding=[4, 2]) 
+        
+        # 4. Icon Button Style (for zoom buttons)
+        style.configure("Icon.TButton", font=('Inter', 14, 'bold'), background="#3498db", foreground="white", relief="flat", padding=[2, 2], width=3) 
+        style.map("Icon.TButton", background=[('active', '#2980b9'), ('disabled', '#7f8c8d')], foreground=[('disabled', '#bdc3c7')])
         # --- End Style Definitions ---
-
-        # Frame for controls at the bottom
-        control_frame = ttk.Frame(self.root, padding="5 5 5 5", style="TFrame") # Reduced frame padding
-        control_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        # Status Label (Left Side)
-        self.status_label = ttk.Label(control_frame, text="Select a directory to start.", style="TLabel")
-        self.status_label.pack(side=tk.LEFT, padx=5)
-
-        # Navigation Buttons (Center Left)
-        self.prev_button = ttk.Button(control_frame, text="← Previous", command=self.prev_image, state=tk.DISABLED, style="TButton", takefocus=0)
-        self.prev_button.pack(side=tk.LEFT, padx=3)
-
-        self.next_button = ttk.Button(control_frame, text="Next →", command=self.next_image, state=tk.DISABLED, style="TButton", takefocus=0)
-        self.next_button.pack(side=tk.LEFT, padx=3)
-        
-        # Marker Toggle Button - Initial style is Marker.Off.TButton
-        self.marker_button = ttk.Button(control_frame, 
-                                        text="Marker Mode (Off)", 
-                                        command=self.toggle_marker_mode, 
-                                        style="Marker.Off.TButton", 
-                                        takefocus=0)
-        self.marker_button.pack(side=tk.LEFT, padx=10)
-        
-        # Save Button - Initial style is Save.Disabled.TButton
-        self.save_button = ttk.Button(control_frame, 
-                                      text="Save & Overwrite Marked (0)", 
-                                      command=self.save_marked_files, 
-                                      state=tk.DISABLED, 
-                                      style="Save.Disabled.TButton", 
-                                      takefocus=0)
-        self.save_button.pack(side=tk.LEFT, padx=10)
-
-        # Copy Button
-        self.copy_button = ttk.Button(control_frame, text="Copy Selected (0)", command=self.copy_selected_files, state=tk.DISABLED, style="TButton", takefocus=0)
-        self.copy_button.pack(side=tk.LEFT, padx=10)
-        
-        # Zoom Buttons 
-        self.zoom_out_button = ttk.Button(control_frame, text="Zoom Out (-)", command=self.zoom_out, style="TButton", takefocus=0)
-        self.zoom_out_button.pack(side=tk.LEFT, padx=10)
-        
-        self.zoom_in_button = ttk.Button(control_frame, text="Zoom In (+)", command=self.zoom_in, style="TButton", takefocus=0)
-        self.zoom_in_button.pack(side=tk.LEFT, padx=3)
-        
-        # Load Button (Far Right)
-        self.load_button = ttk.Button(control_frame, text="Load Folder", command=self.load_directory, style="TButton", takefocus=0)
-        self.load_button.pack(side=tk.RIGHT, padx=5)
 
         # Main content area with left sidebar and canvas
         self.main_content = tk.Frame(self.root, bg="#34495e")
@@ -207,7 +164,7 @@ class FastImageViewer:
         
         # Color selector label
         color_label = tk.Label(self.sidebar_content, text="Marker Color", 
-                              bg="#2c3e50", fg="#ecf0f1", font=("Segoe UI", 9, "bold"))
+                              bg="#2c3e50", fg="#ecf0f1", font=("Segoe UI", 8, "bold"), wraplength=70)
         color_label.pack(pady=(10, 5))
         
         # Color selection buttons
@@ -222,16 +179,11 @@ class FastImageViewer:
             btn_frame = tk.Frame(self.sidebar_content, bg="#2c3e50")
             btn_frame.pack(pady=4)
             
-            # Color button
+            # Color button (no label text)
             color_btn = tk.Button(btn_frame, bg=color_hex, width=6, height=1,
                                  relief="solid", bd=2, cursor="hand2",
                                  command=lambda c=color_name: self.set_marker_color(c))
             color_btn.pack()
-            
-            # Label
-            label = tk.Label(btn_frame, text=display_name, bg="#2c3e50", 
-                           fg="#ecf0f1", font=("Segoe UI", 8))
-            label.pack(pady=(2, 0))
             
             # Selection indicator (initially hidden)
             indicator = tk.Frame(btn_frame, bg="#ecf0f1", height=2)
@@ -240,8 +192,7 @@ class FastImageViewer:
             
             self.color_buttons[color_name] = {
                 'button': color_btn,
-                'indicator': indicator,
-                'label': label
+                'indicator': indicator
             }
         
         # Set default color (red) as selected
@@ -282,7 +233,7 @@ class FastImageViewer:
         shape_separator.pack(fill=tk.X, pady=(10, 8), padx=5)
         
         shape_label = tk.Label(self.sidebar_content, text="Shape Mark", 
-                              bg="#2c3e50", fg="#ecf0f1", font=("Segoe UI", 9, "bold"))
+                              bg="#2c3e50", fg="#ecf0f1", font=("Segoe UI", 8, "bold"), wraplength=70)
         shape_label.pack(pady=(0, 5))
         
         # Shape selection buttons
@@ -290,25 +241,20 @@ class FastImageViewer:
         shapes = [
             ("square", "⬜", "Square"),
             ("circle", "⭕", "Circle"),
-            ("triangle", "▲", "Triangle")
+            ("line", "─", "Line")
         ]
         
         for shape_name, shape_icon, display_name in shapes:
             btn_frame = tk.Frame(self.sidebar_content, bg="#2c3e50")
             btn_frame.pack(pady=3)
             
-            # Shape button
+            # Shape button (icon only, no label)
             shape_btn = tk.Button(btn_frame, text=shape_icon, width=6, height=1,
                                  relief="solid", bd=2, cursor="hand2",
                                  font=("Segoe UI", 12),
                                  bg="#34495e", fg="#ecf0f1",
                                  command=lambda s=shape_name: self.set_shape_type(s))
             shape_btn.pack()
-            
-            # Label
-            label = tk.Label(btn_frame, text=display_name, bg="#2c3e50", 
-                           fg="#ecf0f1", font=("Segoe UI", 8))
-            label.pack(pady=(2, 0))
             
             # Selection indicator (initially hidden)
             indicator = tk.Frame(btn_frame, bg="#ecf0f1", height=2)
@@ -317,22 +263,8 @@ class FastImageViewer:
             
             self.shape_buttons[shape_name] = {
                 'button': shape_btn,
-                'indicator': indicator,
-                'label': label
+                'indicator': indicator
             }
-        
-        # "None" option to disable shape mode
-        none_btn_frame = tk.Frame(self.sidebar_content, bg="#2c3e50")
-        none_btn_frame.pack(pady=3)
-        none_btn = tk.Button(none_btn_frame, text="✖", width=6, height=1,
-                            relief="solid", bd=2, cursor="hand2",
-                            font=("Segoe UI", 10),
-                            bg="#7f8c8d", fg="#ecf0f1",
-                            command=lambda: self.set_shape_type(None))
-        none_btn.pack()
-        none_label = tk.Label(none_btn_frame, text="None", bg="#2c3e50", 
-                             fg="#ecf0f1", font=("Segoe UI", 8))
-        none_label.pack(pady=(2, 0))
         
         # Set default to None (no shape mode)
         self.set_shape_type(None)
@@ -381,16 +313,74 @@ class FastImageViewer:
         
         # Initial call to draw blurred background
         self.root.after_idle(self._draw_blurred_background)
+        
+        # Status Label at the bottom of the window
+        status_frame = tk.Frame(self.root, bg="#34495e", height=30)
+        status_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        status_frame.pack_propagate(False)
+        
+        self.status_label = ttk.Label(status_frame, text="Select a directory to start.", style="TLabel")
+        self.status_label.pack(side=tk.LEFT, padx=5)
+        
+        # Control buttons frame below status bar
+        control_frame = ttk.Frame(self.root, padding="5 5 5 5", style="TFrame")
+        control_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # Navigation Buttons
+        self.prev_button = ttk.Button(control_frame, text="← Prev", command=self.prev_image, state=tk.DISABLED, style="TButton", takefocus=0)
+        self.prev_button.pack(side=tk.LEFT, padx=3)
+
+        self.next_button = ttk.Button(control_frame, text="Next →", command=self.next_image, state=tk.DISABLED, style="TButton", takefocus=0)
+        self.next_button.pack(side=tk.LEFT, padx=3)
+        
+        # Marker Toggle Button
+        self.marker_button = ttk.Button(control_frame, 
+                                        text="Marker (Off)", 
+                                        command=self.toggle_marker_mode, 
+                                        style="Marker.Off.TButton", 
+                                        takefocus=0)
+        self.marker_button.pack(side=tk.LEFT, padx=10)
+        
+        # Save Button
+        self.save_button = ttk.Button(control_frame, 
+                                      text="Save (0)", 
+                                      command=self.save_marked_files, 
+                                      state=tk.DISABLED, 
+                                      style="Save.Disabled.TButton", 
+                                      takefocus=0)
+        self.save_button.pack(side=tk.LEFT, padx=10)
+        
+        # Copy Button
+        self.copy_button = ttk.Button(control_frame, text="Copy (0)", command=self.copy_selected_files, state=tk.DISABLED, style="TButton", takefocus=0)
+        self.copy_button.pack(side=tk.LEFT, padx=10)
+        
+        # Zoom Buttons with icons
+        self.zoom_in_button = ttk.Button(control_frame, text="+", command=self.zoom_in, style="Icon.TButton", takefocus=0)
+        self.zoom_in_button.pack(side=tk.LEFT, padx=10)
+        
+        self.zoom_out_button = ttk.Button(control_frame, text="−", command=self.zoom_out, style="Icon.TButton", takefocus=0)
+        self.zoom_out_button.pack(side=tk.LEFT, padx=3)
+        
+        # Rotation Buttons
+        self.rotate_left_button = ttk.Button(control_frame, text="↺", command=self.rotate_left, style="Icon.TButton", takefocus=0)
+        self.rotate_left_button.pack(side=tk.LEFT, padx=10)
+        
+        self.rotate_right_button = ttk.Button(control_frame, text="↻", command=self.rotate_right, style="Icon.TButton", takefocus=0)
+        self.rotate_right_button.pack(side=tk.LEFT, padx=3)
+        
+        # Load Button (Far Right)
+        self.load_button = ttk.Button(control_frame, text="Load Folder", command=self.load_directory, style="TButton", takefocus=0)
+        self.load_button.pack(side=tk.RIGHT, padx=5)
 
 
     def _set_marker_button_color(self, active):
         """Switches the style and text of the marker button based on state."""
         if active:
             # Change style to Red (On)
-            self.marker_button.config(style="Marker.On.TButton", text="Marker Mode (ON)")
+            self.marker_button.config(style="Marker.On.TButton", text="Marker (ON)")
         else:
             # Change style to Gray (Off)
-            self.marker_button.config(style="Marker.Off.TButton", text="Marker Mode (Off)")
+            self.marker_button.config(style="Marker.Off.TButton", text="Marker (Off)")
             
     def _set_save_button_color(self, enabled):
         """Switches the style of the save button based on state."""
@@ -417,7 +407,11 @@ class FastImageViewer:
                 widgets['button'].config(relief="solid", bd=2)
     
     def set_shape_type(self, shape_type):
-        """Sets the shape type for shape marking mode."""
+        """Sets the shape type for shape marking mode. Toggles off if same shape is clicked again."""
+        # Toggle: if clicking the same shape that's already selected, deselect it
+        if shape_type == self.current_shape_type:
+            shape_type = None
+        
         self.current_shape_type = shape_type
         self.shape_mode_active = (shape_type is not None)
         
@@ -610,7 +604,7 @@ class FastImageViewer:
         
         self._set_marker_button_color(self.marker_mode_active)
         
-        # Show/hide the left sidebar based on marker mode
+        # Show/hide the color sidebar based on marker mode
         if self.marker_mode_active:
             self.image_canvas.focus_set() # Ensure canvas has focus when marker mode is on
             # Show the color and shape selector sidebar by setting width
@@ -735,25 +729,12 @@ class FastImageViewer:
                 outline=self.marker_color, width=self.marker_width,
                 tags="shape_preview"
             )
-        elif self.current_shape_type == "triangle":
-            # Triangle (pointing up)
-            # Calculate triangle points: top, bottom-left, bottom-right
-            center_x = (x1 + x2) / 2
-            top_y = min(y1, y2)
-            bottom_y = max(y1, y2)
-            width = abs(x2 - x1)
-            height = bottom_y - top_y
-            
-            top_point = (center_x, top_y)
-            bottom_left = (center_x - width/2, bottom_y)
-            bottom_right = (center_x + width/2, bottom_y)
-            
-            self.current_shape_item = self.image_canvas.create_polygon(
-                top_point[0], top_point[1],
-                bottom_left[0], bottom_left[1],
-                bottom_right[0], bottom_right[1],
-                outline=self.marker_color, width=self.marker_width,
-                fill="", tags="shape_preview"
+        elif self.current_shape_type == "line":
+            # Line tool - draw a straight line from start to end point
+            self.current_shape_item = self.image_canvas.create_line(
+                x1, y1, x2, y2,
+                fill=self.marker_color, width=self.marker_width,
+                tags="shape_preview"
             )
     
     def _finalize_shape(self, end_x, end_y):
@@ -853,22 +834,12 @@ class FastImageViewer:
                         outline=color, width=width,
                         tags="shape"
                     )
-                elif shape_type == "triangle":
-                    center_x = (x1 + x2) / 2
-                    top_y = min(y1, y2)
-                    bottom_y = max(y1, y2)
-                    width_val = abs(x2 - x1)
-                    
-                    top_point = (center_x, top_y)
-                    bottom_left = (center_x - width_val/2, bottom_y)
-                    bottom_right = (center_x + width_val/2, bottom_y)
-                    
-                    self.image_canvas.create_polygon(
-                        top_point[0], top_point[1],
-                        bottom_left[0], bottom_left[1],
-                        bottom_right[0], bottom_right[1],
-                        outline=color, width=width,
-                        fill="", tags="shape"
+                elif shape_type == "line":
+                    # Line tool - draw a straight line
+                    self.image_canvas.create_line(
+                        x1, y1, x2, y2,
+                        fill=color, width=width,
+                        tags="shape"
                     )
 
     def _do_mark(self, current_x, current_y):
@@ -1563,23 +1534,17 @@ class FastImageViewer:
         # Get files with marks or shapes
         marked_files = set()
         for f in self.marks_cache:
-            if self.marks_cache.get(f):
+            marks = self.marks_cache.get(f)
+            if marks and len(marks) > 0:
                 marked_files.add(f)
         for f in self.shapes_cache:
-            if self.shapes_cache.get(f):
+            shapes = self.shapes_cache.get(f)
+            if shapes and len(shapes) > 0:
                 marked_files.add(f)
         marked_files = list(marked_files)
         
         if not marked_files:
             self.status_label.config(text="No marked photos found to save.", foreground="#f1c40f")
-            return
-
-        # Simple confirmation dialog replacement
-        if not messagebox.askyesno(
-            "Confirm Overwrite",
-            f"You are about to permanently overwrite {len(marked_files)} files with marks and shapes applied. Do you want to continue? This action cannot be undone."
-        ):
-            self.status_label.config(text="Save operation cancelled.", foreground="#f1c40f")
             return
             
         saved_count = 0
@@ -1620,35 +1585,32 @@ class FastImageViewer:
                         # Draw line on the image copy with reduced width (3 instead of 8)
                         draw.line([start_x, start_y, end_x, end_y], fill=mark_color, width=3)
                 
-                # 3. Re-apply all shapes
+                # 3. Re-apply all shapes (save all shapes regardless of rotation)
                 if file_path in self.shapes_cache:
                     shapes = self.shapes_cache[file_path]
-                    for shape in shapes:
-                        norm_x1, norm_y1, norm_x2, norm_y2 = shape['coords']
-                        x1 = int(norm_x1 * img_w)
-                        y1 = int(norm_y1 * img_h)
-                        x2 = int(norm_x2 * img_w)
-                        y2 = int(norm_y2 * img_h)
-                        
-                        color = shape.get('color', 'red')
-                        width = shape.get('width', 2)
-                        shape_type = shape['type']
-                        
-                        if shape_type == "square":
-                            draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
-                        elif shape_type == "circle":
-                            draw.ellipse([x1, y1, x2, y2], outline=color, width=width)
-                        elif shape_type == "triangle":
-                            center_x = (x1 + x2) / 2
-                            top_y = min(y1, y2)
-                            bottom_y = max(y1, y2)
-                            width_val = abs(x2 - x1)
-                            
-                            top_point = (center_x, top_y)
-                            bottom_left = (center_x - width_val/2, bottom_y)
-                            bottom_right = (center_x + width_val/2, bottom_y)
-                            
-                            draw.polygon([top_point, bottom_left, bottom_right], outline=color, width=width)
+                    if shapes:  # Check if shapes list is not empty
+                        for shape in shapes:
+                            try:
+                                norm_x1, norm_y1, norm_x2, norm_y2 = shape['coords']
+                                x1 = int(norm_x1 * img_w)
+                                y1 = int(norm_y1 * img_h)
+                                x2 = int(norm_x2 * img_w)
+                                y2 = int(norm_y2 * img_h)
+                                
+                                color = shape.get('color', 'red')
+                                width = shape.get('width', 2)
+                                shape_type = shape['type']
+                                
+                                if shape_type == "square":
+                                    draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
+                                elif shape_type == "circle":
+                                    draw.ellipse([x1, y1, x2, y2], outline=color, width=width)
+                                elif shape_type == "line":
+                                    # Line tool - draw a straight line
+                                    draw.line([x1, y1, x2, y2], fill=color, width=width)
+                            except Exception as shape_error:
+                                print(f"Error drawing shape {shape.get('type', 'unknown')}: {shape_error}")
+                                continue
 
                 # 4. Save the modified image, overwriting the original file
                 # Convert back to the original mode if necessary (e.g., RGB for JPEG)
@@ -1725,11 +1687,12 @@ class FastImageViewer:
         file_name = os.path.basename(self.image_files[self.current_index])
         zoom_percent = int(self.zoom_factor * 100)
         
-        self.copy_button.config(text=f"Copy Selected ({len(self.selected_files)})")
+        self.copy_button.config(text=f"Copy ({len(self.selected_files)})")
 
-        # Count files that have marks
-        marked_count = len([f for f in self.marks_cache if self.marks_cache.get(f)])
-        self.save_button.config(text=f"Save & Overwrite Marked ({marked_count})")
+        # Count files that have marks or shapes
+        marked_count = len([f for f in self.marks_cache if self.marks_cache.get(f)]) + \
+                      len([f for f in self.shapes_cache if self.shapes_cache.get(f)])
+        self.save_button.config(text=f"Save ({marked_count})")
         
         # Rotation should now always be 0 as the rotation is saved to the file, but we display the state for clarity
         rotation_info = f" | Rotation: {self.current_rotation}° (A/S)" 
