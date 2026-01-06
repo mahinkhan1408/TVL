@@ -6,7 +6,14 @@ import glob
 import sys
 import shutil
 import threading
-from queue import Queue 
+from queue import Queue
+
+# Try to register HEIC/HEIF support for iPhone photos
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass  # HEIC support not available, will skip HEIC files 
 
 class FastImageViewer:
     """
@@ -42,6 +49,26 @@ class FastImageViewer:
         
         self.selected_files = set()     
         self.current_rotation = 0
+        
+        # --- Performance Optimization for Large Images ---
+        self.max_image_dimension = 4000  # Maximum width or height before downscaling
+        self.max_cache_size = 3  # Reduce cache size to save memory
+        
+        # --- Gallery/Thumbnail View ---
+        self.thumbnail_cache = {}  # Cache for thumbnails (LRU limited)
+        self.thumbnail_cache_order = []  # Track access order for LRU eviction
+        self.max_thumbnail_cache_size = 200  # Maximum number of thumbnails to keep in memory
+        self.initial_thumbnail_load_count = 50  # Load first 50 thumbnails initially (very conservative for large folders)
+        self.gallery_canvas = None
+        self.thumbnail_size = 90  # Size of thumbnails in gallery (reduced for better fit)
+        self.thumbnail_padding = 6  # Padding between thumbnails (3px on each side)
+        self.thumbnail_spacing = self.thumbnail_size + self.thumbnail_padding  # Total width per thumbnail
+        self.gallery_updating = False  # Flag to prevent multiple simultaneous updates
+        self.thumbnail_load_queue = []  # Queue for loading thumbnails
+        self.thumbnail_loading_active = False  # Flag to prevent multiple load operations
+        self.thumbnails_loaded_range = (0, 0)  # Track which range of thumbnails have been loaded
+        self.last_gallery_selection_index = -1  # Track last selected thumbnail for efficient updates
+        self.gallery_thumbnails = {}  # Store canvas item IDs for thumbnails: {index: {'image_id': id, 'photo': PhotoImage}}
         
         # --- PERFORMANCE OPTIMIZATION ---
         self.zoom_update_pending = False
@@ -83,12 +110,17 @@ class FastImageViewer:
         # --- Bind Global Events ---
         self.root.bind("<Left>", lambda e: self.prev_image())
         self.root.bind("<Right>", lambda e: self.next_image())
+        self.root.bind("<Home>", lambda e: self.go_to_first_image())
+        self.root.bind("<End>", lambda e: self.go_to_last_image())
         self.root.bind("<Configure>", self.on_resize)
         
         # --- Rotation Bindings (a for Left, s for Right) ---
         # NOTE: These now trigger permanent save/overwrite to the file.
         self.root.bind("a", lambda e: self.rotate_left())
         self.root.bind("s", lambda e: self.rotate_right())
+        
+        # --- Delete Binding (d for Delete) ---
+        self.root.bind("d", lambda e: self.delete_current_image())
         
         # Use after to allow the window to fully initialize before asking for a folder
         self.root.after(100, self.load_directory) 
@@ -197,6 +229,39 @@ class FastImageViewer:
         
         # Set default color (red) as selected
         self.set_marker_color("red")
+        
+        # Thickness control section
+        thickness_separator = tk.Frame(self.sidebar_content, bg="#34495e", height=1)
+        thickness_separator.pack(fill=tk.X, pady=(10, 8), padx=5)
+        
+        thickness_label = tk.Label(self.sidebar_content, text="Thickness", 
+                                  bg="#2c3e50", fg="#ecf0f1", font=("Segoe UI", 8, "bold"), wraplength=70)
+        thickness_label.pack(pady=(0, 5))
+        
+        # Thickness control frame
+        thickness_frame = tk.Frame(self.sidebar_content, bg="#2c3e50")
+        thickness_frame.pack(pady=4, padx=5)
+        
+        # Thickness slider
+        self.thickness_var = tk.IntVar(value=self.marker_width)
+        thickness_scale = tk.Scale(thickness_frame, 
+                                   from_=1, to=20, 
+                                   orient=tk.HORIZONTAL,
+                                   variable=self.thickness_var,
+                                   bg="#2c3e50", fg="#ecf0f1",
+                                   highlightthickness=0,
+                                   troughcolor="#34495e",
+                                   activebackground="#3498db",
+                                   length=70,
+                                   command=self.set_marker_thickness)
+        thickness_scale.pack()
+        
+        # Thickness value label
+        self.thickness_value_label = tk.Label(thickness_frame, 
+                                             text=str(self.marker_width),
+                                             bg="#2c3e50", fg="#ecf0f1", 
+                                             font=("Segoe UI", 8))
+        self.thickness_value_label.pack(pady=(2, 0))
         
         # Eraser section
         eraser_separator = tk.Frame(self.sidebar_content, bg="#34495e", height=1)
@@ -371,6 +436,43 @@ class FastImageViewer:
         # Load Button (Far Right)
         self.load_button = ttk.Button(control_frame, text="Load Folder", command=self.load_directory, style="TButton", takefocus=0)
         self.load_button.pack(side=tk.RIGHT, padx=5)
+        
+        # Gallery/Thumbnail view frame (between controls and status bar)
+        gallery_container = tk.Frame(self.root, bg="#2c3e50", height=110)
+        gallery_container.pack(side=tk.BOTTOM, fill=tk.X, before=status_frame)
+        gallery_container.pack_propagate(False)
+        
+        # Scrollable canvas for thumbnails - draw directly on canvas, no Frame widgets
+        self.gallery_canvas = tk.Canvas(gallery_container, bg="#2c3e50", height=110, highlightthickness=0)
+        gallery_scrollbar = tk.Scrollbar(gallery_container, orient="horizontal", command=self.gallery_canvas.xview)
+        self.gallery_canvas.configure(xscrollcommand=gallery_scrollbar.set)
+        
+        gallery_scrollbar.pack(side="bottom", fill="x")
+        self.gallery_canvas.pack(side="left", fill="both", expand=True)
+        
+        # Bind mouse wheel to gallery canvas
+        def on_gallery_scroll(event):
+            if self.gallery_canvas.winfo_containing(event.x_root, event.y_root):
+                self.gallery_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.gallery_canvas.bind("<MouseWheel>", on_gallery_scroll)
+        
+        # Bind click events to canvas for thumbnail navigation
+        def on_gallery_click(event):
+            if not self.image_files:
+                return
+            # Calculate which thumbnail was clicked based on x coordinate
+            # Account for canvas scrolling
+            canvas_x = self.gallery_canvas.canvasx(event.x)
+            # Each thumbnail slot is exactly thumbnail_spacing wide
+            # Slot 0 starts at 0, slot 1 at thumbnail_spacing, etc.
+            # So we can simply divide by spacing to get the slot index
+            thumbnail_index = int(canvas_x / self.thumbnail_spacing)
+            # Clamp to valid range
+            thumbnail_index = max(0, min(thumbnail_index, len(self.image_files) - 1))
+            if 0 <= thumbnail_index < len(self.image_files):
+                self.navigate_to_image(thumbnail_index)
+        self.gallery_canvas.bind("<Button-1>", on_gallery_click)
+        self.gallery_canvas.config(cursor="hand2")
 
 
     def _set_marker_button_color(self, active):
@@ -390,6 +492,18 @@ class FastImageViewer:
         else:
             # Change style to Blue (Disabled)
             self.save_button.config(style="Save.Disabled.TButton")
+    
+    def set_marker_thickness(self, value=None):
+        """Sets the marker/shape thickness."""
+        if value is None:
+            value = self.thickness_var.get()
+        else:
+            # Scale widget passes value as string
+            value = int(float(value))
+        self.marker_width = value
+        # Update the value label
+        if hasattr(self, 'thickness_value_label'):
+            self.thickness_value_label.config(text=str(value))
     
     def set_marker_color(self, color_name):
         """Sets the marker color and updates the UI."""
@@ -1125,6 +1239,12 @@ class FastImageViewer:
             self.shapes_cache.clear() # Clear shapes cache on new directory load
             
             if self.image_files:
+                # Clear thumbnail cache and order
+                self.thumbnail_cache.clear()
+                self.thumbnail_cache_order.clear()
+                self.thumbnails_loaded_range = (0, 0)
+                self.last_gallery_selection_index = -1
+                
                 # Find the first valid image (skip corrupted ones)
                 found_valid = False
                 for i in range(len(self.image_files)):
@@ -1136,6 +1256,13 @@ class FastImageViewer:
                     self.status_label.config(text="No valid images found in the selected directory.")
                     self.image_canvas.delete("all")
                     self.current_index = -1
+                else:
+                    # Update gallery view first (with placeholders)
+                    self.update_gallery()
+                    # Only pre-load thumbnails if folder is small (less than 1000 photos)
+                    if len(self.image_files) < 1000:
+                        self.preload_all_thumbnails()
+                    # For large folders, thumbnails will load on-demand as user navigates
                 
                 self.image_canvas.focus_set() # Ensure canvas has focus
             else:
@@ -1143,16 +1270,26 @@ class FastImageViewer:
                 self.image_canvas.delete("all")
                 self.update_navigation_state()
                 self.update_status()
+                # Clear gallery
+                if self.gallery_canvas:
+                    self.gallery_canvas.delete("all")
+                    self.gallery_thumbnails.clear()
 
     def _get_image_files(self, directory):
         """
         Returns a sorted list of absolute paths to image files in the directory.
         Sorts by file modification time (oldest first).
+        Supports: JPG, JPEG, PNG, GIF, BMP, JFIF, HEIC, HEIF (iPhone photos)
         """
-        supported_extensions = ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp']
+        supported_extensions = ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.jfif', '*.heic', '*.heif']
         files = []
         for ext in supported_extensions:
+            # Check both lowercase and uppercase extensions
             files.extend(glob.glob(os.path.join(directory, ext)))
+            files.extend(glob.glob(os.path.join(directory, ext.upper())))
+        
+        # Remove duplicates (in case both lowercase and uppercase match)
+        files = list(set(files))
         
         # --- Sort by modification time (mtime) in ascending order ---
         files.sort(key=os.path.getmtime)
@@ -1169,19 +1306,31 @@ class FastImageViewer:
                 self.update_image_display(self.current_index)
                 
     def _get_original_image(self, index):
-        """Loads or retrieves the original PIL Image object from cache."""
+        """Loads or retrieves the original PIL Image object from cache.
+        For very large images, automatically downscales to improve performance."""
         if index in self.cache:
             return self.cache[index]
             
         file_path = self.image_files[index]
         try:
             # We explicitly handle the cache clearance for new image viewing
-            if len(self.cache) > 5:
+            if len(self.cache) > self.max_cache_size:
                 # Simple LRU-like cache: remove the oldest entry (lowest index key)
                 oldest_index = min(self.cache.keys())
                 del self.cache[oldest_index]
 
             img = Image.open(file_path)
+            
+            # Performance optimization: downscale very large images
+            orig_w, orig_h = img.size
+            if orig_w > self.max_image_dimension or orig_h > self.max_image_dimension:
+                # Calculate scaling factor to fit within max dimension
+                scale = min(self.max_image_dimension / orig_w, self.max_image_dimension / orig_h)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+                # Use high-quality resampling for downscaling
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            
             # Convert to RGBA if not already to support potential transparency/drawing
             if img.mode != 'RGBA':
                 img = img.convert('RGBA') 
@@ -1198,6 +1347,10 @@ class FastImageViewer:
         This is the main function responsible for the visual update.
         Returns True if image loaded successfully, False otherwise.
         """
+        # Validate index before proceeding
+        if index < 0 or index >= len(self.image_files):
+            return False
+        
         # 1. Load the original PIL Image
         pil_image = self._get_original_image(index)
         if not pil_image:
@@ -1222,8 +1375,11 @@ class FastImageViewer:
         
         self.current_pil_img = pil_image
         
-        # 2.5 Apply rotation (local state, should be 0 unless called during a rotation key press)
-        rotated_image = pil_image.rotate(self.current_rotation, expand=True, resample=Image.Resampling.LANCZOS)
+        # 2.5 Apply rotation (OPTIMIZATION: skip if 0 to avoid expensive operation)
+        if self.current_rotation == 0:
+            rotated_image = pil_image  # No rotation needed
+        else:
+            rotated_image = pil_image.rotate(self.current_rotation, expand=True, resample=Image.Resampling.LANCZOS)
 
         canvas_w = self.image_canvas.winfo_width()
         canvas_h = self.image_canvas.winfo_height()
@@ -1232,16 +1388,39 @@ class FastImageViewer:
         orig_w, orig_h = rotated_image.size
         
         if self.zoom_factor == 1.0:
-            # Fit to Window logic 
-            img_copy = rotated_image.copy()
-            img_copy.thumbnail((canvas_w, canvas_h), Image.Resampling.LANCZOS)
+            # Fit to Window logic - OPTIMIZATION: use thumbnail directly (no copy needed)
+            # Limit thumbnail size to canvas size for performance
+            max_thumb_size = max(canvas_w, canvas_h) * 2  # Allow 2x for better quality
+            if orig_w > max_thumb_size or orig_h > max_thumb_size:
+                # Pre-scale very large images before thumbnail
+                scale = min(max_thumb_size / orig_w, max_thumb_size / orig_h)
+                pre_w = int(orig_w * scale)
+                pre_h = int(orig_h * scale)
+                img_copy = rotated_image.resize((pre_w, pre_h), Image.Resampling.LANCZOS)
+                img_copy.thumbnail((canvas_w, canvas_h), Image.Resampling.LANCZOS)
+            else:
+                # Use thumbnail directly - more efficient than copy + resize
+                img_copy = rotated_image.copy() if rotated_image is not pil_image else pil_image.copy()
+                img_copy.thumbnail((canvas_w, canvas_h), Image.Resampling.LANCZOS)
         else:
-            # Zoomed logic
+            # Zoomed logic - limit maximum display size for performance
             display_w = int(orig_w * self.zoom_factor)
             display_h = int(orig_h * self.zoom_factor)
             
-            # Resize the image
-            img_copy = rotated_image.resize((display_w, display_h), Image.Resampling.LANCZOS)
+            # Limit maximum display size to prevent memory issues
+            max_display_size = 6000  # Maximum pixels for display
+            if display_w > max_display_size or display_h > max_display_size:
+                scale = min(max_display_size / display_w, max_display_size / display_h)
+                display_w = int(display_w * scale)
+                display_h = int(display_h * scale)
+            
+            # Use appropriate resampling based on size
+            if display_w > 2000 or display_h > 2000:
+                # For large displays, use BILINEAR for better performance
+                img_copy = rotated_image.resize((display_w, display_h), Image.Resampling.BILINEAR)
+            else:
+                # For smaller displays, use LANCZOS for better quality
+                img_copy = rotated_image.resize((display_w, display_h), Image.Resampling.LANCZOS)
 
         # 4. Convert and draw onto Canvas
         photo_image = ImageTk.PhotoImage(img_copy)
@@ -1263,18 +1442,32 @@ class FastImageViewer:
             self._center_and_clamp_image() 
         
         # 5. Update state and status bar
+        # Ensure index is valid before setting current_index
+        if index < 0 or index >= len(self.image_files):
+            # Invalid index - don't update
+            return False
+        
         if self.current_index != index:
             self.current_index = index
             
-        self.update_navigation_state()
-        self.update_status()
+        # OPTIMIZATION: Defer non-critical updates to avoid blocking image display
+        # Update image first, then update UI elements
         self._draw_selection_border()
-        return True
         self._draw_all_marks()
         self._draw_all_shapes()
+        
+        # Defer status and navigation updates (less critical, can happen after image is shown)
+        self.root.after_idle(self.update_navigation_state)
+        self.root.after_idle(self.update_status)
+        
+        # Update gallery to highlight current image (defer for performance)
+        if self.gallery_canvas:
+            self.root.after_idle(self.update_gallery_selection)
             
-        # 6. Initiate pre-caching for the next image
-        self.root.after(50, self.pre_cache_next)
+        # 6. Initiate pre-caching for the next image (only if not at last image)
+        if self.current_index < len(self.image_files) - 1:
+            self.root.after(50, self.pre_cache_next)
+        return True
 
     def pre_cache_next(self):
         """Pre-loads adjacent images in background for smooth navigation."""
@@ -1296,6 +1489,15 @@ class FastImageViewer:
                     try:
                         file_path = self.image_files[idx]
                         img = Image.open(file_path)
+                        
+                        # Performance optimization: downscale very large images in background
+                        orig_w, orig_h = img.size
+                        if orig_w > self.max_image_dimension or orig_h > self.max_image_dimension:
+                            scale = min(self.max_image_dimension / orig_w, self.max_image_dimension / orig_h)
+                            new_w = int(orig_w * scale)
+                            new_h = int(orig_h * scale)
+                            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        
                         if img.mode != 'RGBA':
                             img = img.convert('RGBA')
                         img.load()
@@ -1382,8 +1584,9 @@ class FastImageViewer:
             
     def next_image(self):
         """Moves to and displays the next image, resetting zoom, pan, and rotation.
-        Automatically skips corrupted images and continues to the next valid one."""
-        if self.current_index >= len(self.image_files) - 1:
+        Automatically skips corrupted images and continues to the next valid one.
+        Stops at the last valid image."""
+        if not self.image_files or self.current_index >= len(self.image_files) - 1:
             return
         
         # Try to find the next valid image
@@ -1393,15 +1596,132 @@ class FastImageViewer:
         
         while attempts < max_attempts:
             next_index = start_index + attempts
+            # Strict bounds check - don't go beyond the last image
             if next_index >= len(self.image_files):
                 break
             # Try to load the image
             if self.update_image_display(next_index, reset_zoom=True):
                 # Successfully loaded, preload next images for smooth navigation
                 self.pre_cache_next()
+                # Load thumbnails around current position if needed
+                self.load_thumbnails_around_index(next_index)
                 return
             attempts += 1
             
+    def go_to_first_image(self):
+        """Navigates to the first image in the gallery (Home key)."""
+        if not self.image_files or len(self.image_files) == 0:
+            return
+        self.navigate_to_image(0)
+    
+    def go_to_last_image(self):
+        """Navigates to the last image in the gallery (End key)."""
+        if not self.image_files or len(self.image_files) == 0:
+            return
+        last_index = len(self.image_files) - 1
+        self.navigate_to_image(last_index)
+    
+    def delete_current_image(self):
+        """Deletes the current image file (D key)."""
+        if self.current_index == -1 or not self.image_files or len(self.image_files) == 0:
+            return
+        
+        current_file = self.image_files[self.current_index]
+        
+        try:
+            # Delete the file from disk
+            if os.path.exists(current_file):
+                os.remove(current_file)
+            
+            # Remove from selected files if it was selected
+            if current_file in self.selected_files:
+                self.selected_files.remove(current_file)
+            
+            # Clean up caches
+            if current_file in self.marks_cache:
+                del self.marks_cache[current_file]
+            if current_file in self.shapes_cache:
+                del self.shapes_cache[current_file]
+            
+            # Remove thumbnail from cache and gallery if it exists
+            if self.current_index in self.thumbnail_cache:
+                del self.thumbnail_cache[self.current_index]
+            if self.current_index in self.thumbnail_cache_order:
+                self.thumbnail_cache_order.remove(self.current_index)
+            if self.current_index in self.gallery_thumbnails:
+                # Delete the canvas item
+                thumbnail_data = self.gallery_thumbnails[self.current_index]
+                if 'image_id' in thumbnail_data and self.gallery_canvas:
+                    self.gallery_canvas.delete(thumbnail_data['image_id'])
+                del self.gallery_thumbnails[self.current_index]
+            
+            # Remove from image_files list
+            deleted_index = self.current_index
+            del self.image_files[self.current_index]
+            
+            # Update thumbnail cache indices (shift all indices after deleted one down by 1)
+            # Items before deleted_index keep their indices, items after need to shift down by 1
+            new_thumbnail_cache = {}
+            new_thumbnail_cache_order = []
+            new_gallery_thumbnails = {}
+            
+            # Process existing cache items
+            for old_idx in list(self.thumbnail_cache.keys()):
+                if old_idx < deleted_index:
+                    # Keep same index (before deleted position)
+                    new_thumbnail_cache[old_idx] = self.thumbnail_cache[old_idx]
+                    if old_idx in self.thumbnail_cache_order:
+                        new_thumbnail_cache_order.append(old_idx)
+                    if old_idx in self.gallery_thumbnails:
+                        new_gallery_thumbnails[old_idx] = self.gallery_thumbnails[old_idx]
+                elif old_idx > deleted_index:
+                    # Shift down by 1 (after deleted position)
+                    new_idx = old_idx - 1
+                    new_thumbnail_cache[new_idx] = self.thumbnail_cache[old_idx]
+                    if old_idx in self.thumbnail_cache_order:
+                        new_thumbnail_cache_order.append(new_idx)
+                    if old_idx in self.gallery_thumbnails:
+                        new_gallery_thumbnails[new_idx] = self.gallery_thumbnails[old_idx]
+            
+            self.thumbnail_cache = new_thumbnail_cache
+            self.thumbnail_cache_order = new_thumbnail_cache_order
+            self.gallery_thumbnails = new_gallery_thumbnails
+            
+            # Update current index
+            if len(self.image_files) == 0:
+                # No more images
+                self.current_index = -1
+                self.image_canvas.delete("all")
+                self.update_status()
+                self.update_navigation_state()
+                if self.gallery_canvas:
+                    self.gallery_canvas.delete("all")
+                    self.gallery_thumbnails.clear()
+            elif self.current_index >= len(self.image_files):
+                # Was at the end, go to the new last image
+                self.current_index = len(self.image_files) - 1
+                self.update_image_display(self.current_index, reset_zoom=True)
+                self.load_thumbnails_around_index(self.current_index)
+                self.root.after_idle(lambda: self._scroll_gallery_to_thumbnail(self.current_index))
+            else:
+                # Stay at same index (which now points to the next image)
+                self.update_image_display(self.current_index, reset_zoom=True)
+                self.load_thumbnails_around_index(self.current_index)
+                self.root.after_idle(lambda: self._scroll_gallery_to_thumbnail(self.current_index))
+            
+            # Update gallery to reflect the removed image
+            if self.gallery_canvas and len(self.image_files) > 0:
+                # Rebuild gallery with updated indices
+                self.update_gallery()
+            
+            self.update_status()
+            self.update_navigation_state()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete photo:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+    
     def prev_image(self):
         """Moves to and displays the previous image, resetting zoom, pan, and rotation.
         Automatically skips corrupted images and continues to the previous valid one."""
@@ -1421,6 +1741,8 @@ class FastImageViewer:
             if self.update_image_display(prev_index, reset_zoom=True):
                 # Successfully loaded, preload adjacent images for smooth navigation
                 self.pre_cache_next()
+                # Load thumbnails around current position if needed
+                self.load_thumbnails_around_index(prev_index)
                 return
             attempts += 1
 
@@ -1660,6 +1982,12 @@ class FastImageViewer:
             self.copy_button.config(state=tk.DISABLED)
             self.save_button.config(state=tk.DISABLED)
             return
+        
+        # Ensure current_index is within valid range
+        if self.current_index < 0:
+            self.current_index = 0
+        elif self.current_index >= len(self.image_files):
+            self.current_index = len(self.image_files) - 1
             
         self.prev_button.config(state=tk.NORMAL if self.current_index > 0 else tk.DISABLED)
         self.next_button.config(state=tk.NORMAL if self.current_index < len(self.image_files) - 1 else tk.DISABLED)
@@ -1749,6 +2077,540 @@ class FastImageViewer:
         else:
             # If no background image path or path is invalid, ensure solid background
             self.image_canvas.config(bg="#34495e")
+    
+    # --- Gallery/Thumbnail View Methods ---
+    
+    def _evict_old_thumbnails(self):
+        """Evicts old thumbnails from cache when limit is exceeded (LRU eviction)."""
+        while len(self.thumbnail_cache) >= self.max_thumbnail_cache_size and self.thumbnail_cache_order:
+            # Remove least recently used thumbnail
+            oldest_idx = self.thumbnail_cache_order.pop(0)
+            if oldest_idx in self.thumbnail_cache:
+                del self.thumbnail_cache[oldest_idx]
+    
+    def _get_thumbnail(self, index):
+        """Generates or retrieves a thumbnail for the image at the given index."""
+        if index in self.thumbnail_cache:
+            # Update access order (move to end for LRU)
+            if index in self.thumbnail_cache_order:
+                self.thumbnail_cache_order.remove(index)
+            self.thumbnail_cache_order.append(index)
+            return self.thumbnail_cache[index]
+        
+        if index < 0 or index >= len(self.image_files):
+            return None
+        
+        try:
+            file_path = self.image_files[index]
+            img = Image.open(file_path)
+            
+            # Create thumbnail
+            img.thumbnail((self.thumbnail_size, self.thumbnail_size), Image.Resampling.LANCZOS)
+            
+            # Convert to PhotoImage
+            thumbnail_photo = ImageTk.PhotoImage(img)
+            
+            # Evict old thumbnails if cache is full
+            self._evict_old_thumbnails()
+            
+            # Add to cache with LRU tracking
+            self.thumbnail_cache[index] = thumbnail_photo
+            if index in self.thumbnail_cache_order:
+                self.thumbnail_cache_order.remove(index)
+            self.thumbnail_cache_order.append(index)
+            return thumbnail_photo
+        except Exception as e:
+            print(f"Error generating thumbnail for {file_path}: {e}")
+            return None
+    
+    def _load_thumbnail_batch(self, start_idx, end_idx):
+        """Loads a batch of thumbnails in a background thread."""
+        if not self.image_files or self.thumbnail_loading_active:
+            return
+        
+        self.thumbnail_loading_active = True
+        
+        def load_thumbnails():
+            """Load thumbnails in background thread - load file data, create PIL Image and PhotoImage in main thread."""
+            total_images = len(self.image_files)
+            end_idx_clamped = min(end_idx, total_images)
+            
+            # Collect indices that need loading
+            indices_to_load = []
+            for i in range(start_idx, end_idx_clamped):
+                if i not in self.thumbnail_cache:
+                    indices_to_load.append(i)
+            
+            if not indices_to_load:
+                self.thumbnail_loading_active = False
+                return
+            
+            # Process in batches to avoid memory issues (small batches for large folders)
+            batch_size = 5
+            for batch_start in range(0, len(indices_to_load), batch_size):
+                batch_end = min(batch_start + batch_size, len(indices_to_load))
+                batch = indices_to_load[batch_start:batch_end]
+                
+                for i in batch:
+                    try:
+                        file_path = self.image_files[i]
+                        if not os.path.exists(file_path):
+                            continue
+                        
+                        # Read the file as bytes in background thread (file I/O is thread-safe)
+                        with open(file_path, 'rb') as f:
+                            img_bytes = f.read()
+                        
+                        # Use a closure to capture the index and file path properly
+                        def make_cache_handler(idx, img_data, fpath):
+                            def cache_handler():
+                                try:
+                                    # Check cache limit before creating
+                                    if len(self.thumbnail_cache) >= self.max_thumbnail_cache_size:
+                                        self._evict_old_thumbnails()
+                                    
+                                    # Verify index is still valid before caching
+                                    if idx >= len(self.image_files):
+                                        return
+                                    if self.image_files[idx] != fpath:
+                                        return  # File list changed, skip this thumbnail
+                                    
+                                    # Skip if already in cache (race condition protection)
+                                    if idx in self.thumbnail_cache:
+                                        return
+                                    
+                                    # Create PIL Image from bytes in main thread (required for thread safety)
+                                    from io import BytesIO
+                                    img = Image.open(BytesIO(img_data))
+                                    
+                                    # Calculate proportional dimensions to fit within thumbnail_size
+                                    original_width, original_height = img.size
+                                    ratio = min(self.thumbnail_size / original_width, self.thumbnail_size / original_height)
+                                    new_width = int(original_width * ratio)
+                                    new_height = int(original_height * ratio)
+                                    
+                                    # Resize image while maintaining aspect ratio
+                                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                                    
+                                    # Create a new blank image with the desired square thumbnail_size background
+                                    background = Image.new("RGBA", (self.thumbnail_size, self.thumbnail_size), (44, 62, 80, 255))  # Match canvas bg
+                                    
+                                    # Calculate paste position to center the resized image
+                                    paste_x = (self.thumbnail_size - new_width) // 2
+                                    paste_y = (self.thumbnail_size - new_height) // 2
+                                    
+                                    background.paste(img, (paste_x, paste_y))
+                                    
+                                    # Create PhotoImage in main thread (required for Tkinter)
+                                    thumbnail_photo = ImageTk.PhotoImage(background)
+                                    
+                                    # Add to cache with LRU tracking
+                                    self.thumbnail_cache[idx] = thumbnail_photo
+                                    if idx in self.thumbnail_cache_order:
+                                        self.thumbnail_cache_order.remove(idx)
+                                    self.thumbnail_cache_order.append(idx)
+                                    
+                                    # Update gallery if it's already displayed
+                                    self._update_gallery_placeholders()
+                                except MemoryError:
+                                    print(f"Memory error creating thumbnail {idx}, clearing cache")
+                                    # Clear cache and try to continue
+                                    self.thumbnail_cache.clear()
+                                    self.thumbnail_cache_order.clear()
+                                except Exception as e:
+                                    print(f"Error creating PhotoImage for thumbnail {idx}: {e}")
+                            return cache_handler
+                        
+                        # Schedule PIL Image and PhotoImage creation in main thread
+                        self.root.after(0, make_cache_handler(i, img_bytes, file_path))
+                    except Exception as e:
+                        # Log errors but continue processing other images
+                        print(f"Error loading thumbnail {i}: {e}")
+                
+                # Small delay between batches to prevent overwhelming the main thread
+                import time
+                time.sleep(0.1)  # Increased delay to prevent memory issues
+            
+            # Update loaded range
+            self.thumbnails_loaded_range = (min(self.thumbnails_loaded_range[0], start_idx), 
+                                           max(self.thumbnails_loaded_range[1], end_idx_clamped))
+            self.thumbnail_loading_active = False
+        
+        # Run in background thread
+        thumbnail_thread = threading.Thread(target=load_thumbnails, daemon=True)
+        thumbnail_thread.start()
+    
+    def preload_all_thumbnails(self):
+        """Pre-loads initial batch of thumbnails (first 50) in a background thread."""
+        if not self.image_files:
+            return
+        
+        total_images = len(self.image_files)
+        # Only load first 500 thumbnails initially if there are more than 500 photos
+        if total_images > self.initial_thumbnail_load_count:
+            load_count = self.initial_thumbnail_load_count
+        else:
+            load_count = total_images
+        
+        self.thumbnails_loaded_range = (0, load_count)
+        self._load_thumbnail_batch(0, load_count)
+    
+    def load_thumbnails_around_index(self, index, radius=50):
+        """Loads thumbnails around a given index if not already loaded (debounced for performance)."""
+        if not self.image_files or self.thumbnail_loading_active:
+            return
+        
+        total_images = len(self.image_files)
+        start_idx = max(0, index - radius)
+        end_idx = min(total_images, index + radius)
+        
+        # Check if we need to load any thumbnails in this range
+        needs_loading = False
+        for i in range(start_idx, end_idx):
+            if i not in self.thumbnail_cache:
+                needs_loading = True
+                break
+        
+        if needs_loading:
+            # Delay loading slightly to avoid loading on every single navigation (debounce)
+            self.root.after(300, lambda: self._load_thumbnail_batch(start_idx, end_idx) if not self.thumbnail_loading_active else None)
+    
+    def _update_gallery_placeholders(self):
+        """Updates placeholder thumbnails with actual images when they become available."""
+        if not self.gallery_canvas or not self.image_files:
+            return
+        
+        # Update thumbnails that have placeholders but now have cached images
+        for index in list(self.gallery_thumbnails.keys()):
+            if index in self.thumbnail_cache:
+                thumbnail_data = self.gallery_thumbnails[index]
+                cached_photo = self.thumbnail_cache[index]
+                
+                # If we have a cached photo but the stored photo is None (placeholder)
+                if thumbnail_data['photo'] is None and cached_photo is not None:
+                    # Delete old placeholder (text item)
+                    self.gallery_canvas.delete(thumbnail_data['image_id'])
+                    
+                    # Calculate position (use EXACT same calculation as _draw_thumbnail_on_canvas)
+                    slot_start = index * self.thumbnail_spacing
+                    x = slot_start + self.thumbnail_size // 2 + self.thumbnail_padding // 2
+                    y = 55
+                    
+                    # Draw new image
+                    image_id = self.gallery_canvas.create_image(x, y, image=cached_photo, anchor="center")
+                    thumbnail_data['image_id'] = image_id
+                    thumbnail_data['photo'] = cached_photo  # Update reference
+    
+    def _draw_thumbnail_on_canvas(self, index):
+        """Draws a single thumbnail on the canvas at the given index."""
+        if not self.gallery_canvas or not self.image_files:
+            return False
+        
+        try:
+            # Calculate x position: center of each thumbnail slot
+            # Each slot is thumbnail_spacing wide, starting at index * thumbnail_spacing
+            # Center of slot = start + half of spacing
+            slot_start = index * self.thumbnail_spacing
+            x = slot_start + self.thumbnail_size // 2 + self.thumbnail_padding // 2
+            y = 55  # Center vertically (canvas height is 110)
+            
+            # Get thumbnail from cache
+            thumbnail_photo = self.thumbnail_cache.get(index)
+            image_id = None
+            
+            if thumbnail_photo:
+                # Draw thumbnail image
+                image_id = self.gallery_canvas.create_image(x, y, image=thumbnail_photo, anchor="center")
+            else:
+                # Draw placeholder text
+                image_id = self.gallery_canvas.create_text(
+                    x, y, text="...", fill="#7f8c8d", font=("Arial", 12)
+                )
+            
+            # Store references to keep PhotoImage alive and track items
+            # Note: We don't draw borders here - selection border is drawn separately in update_gallery_selection
+            self.gallery_thumbnails[index] = {
+                'image_id': image_id,
+                'photo': thumbnail_photo  # Keep reference to prevent garbage collection
+            }
+            
+            return True
+        except Exception as e:
+            print(f"Error drawing thumbnail {index} on canvas: {e}")
+            return False
+    
+    def _create_gallery_async(self, start_idx, total_images):
+        """Creates gallery thumbnails asynchronously in batches using canvas drawing."""
+        # Early exit checks - but don't reset flag if we're mid-creation
+        if not self.gallery_canvas or not self.image_files:
+            if start_idx == 0:  # Only reset on initial call
+                self.gallery_updating = False
+            return
+        
+        # Check if canvas still exists
+        try:
+            if not self.gallery_canvas.winfo_exists():
+                if start_idx == 0:  # Only reset on initial call
+                    self.gallery_updating = False
+                return
+        except:
+            if start_idx == 0:  # Only reset on initial call
+                self.gallery_updating = False
+            return
+        
+        batch_size = 50
+        end_idx = min(start_idx + batch_size, total_images)
+        
+        # Draw batch of thumbnails on canvas
+        created_count = 0
+        for i in range(start_idx, end_idx):
+            try:
+                if self._draw_thumbnail_on_canvas(i):
+                    created_count += 1
+            except Exception as e:
+                print(f"Error drawing thumbnail {i} on canvas: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        # Progress logging (every 50 thumbnails or at completion)
+        if start_idx % 50 == 0 or end_idx >= total_images:
+            print(f"Gallery creation progress: {end_idx}/{total_images} ({end_idx*100//total_images}%) - drawn {created_count} in this batch")
+        
+        # Continue with next batch if there are more
+        if end_idx < total_images:
+            # Use strict index passing - pass end_idx directly as next start_idx
+            next_start = end_idx
+            def create_next_batch():
+                # Verify we should continue
+                if not self.gallery_canvas or not self.image_files:
+                    print(f"Stopping gallery creation at {next_start}: gallery_canvas or image_files missing")
+                    self.gallery_updating = False
+                    return
+                if not self.gallery_updating:
+                    print(f"Stopping gallery creation at {next_start}: gallery_updating flag is False")
+                    return
+                try:
+                    self._create_gallery_async(next_start, total_images)
+                except Exception as e:
+                    print(f"Error in async gallery creation continuation at index {next_start}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.gallery_updating = False
+            self.root.after(1, create_next_batch)
+        else:
+            # All thumbnails processed - completion
+            print(f"Gallery creation completed: {total_images}/{total_images} (100%)")
+            
+            # Update scroll region to fit all thumbnails
+            total_width = total_images * self.thumbnail_spacing
+            canvas_height = 110
+            self.gallery_canvas.config(scrollregion=(0, 0, total_width, canvas_height))
+            
+            self.gallery_updating = False
+            
+            # Safety check: Use a delay to ensure any lagging thumbnails are drawn
+            def finalize_gallery():
+                try:
+                    actual_count = len(self.gallery_thumbnails)
+                    print(f"Final gallery thumbnail count: {actual_count}/{total_images}")
+                    self.update_gallery_selection()
+                    self._update_gallery_placeholders()
+                except Exception as e:
+                    print(f"Error finalizing gallery: {e}")
+            self.root.after(500, finalize_gallery)
+    
+    def update_gallery(self):
+        """Updates the gallery view with all image thumbnails using canvas drawing."""
+        if not self.gallery_canvas or not self.image_files:
+            return
+        
+        # Prevent multiple simultaneous updates
+        if self.gallery_updating:
+            return
+        
+        self.gallery_updating = True
+        
+        try:
+            # Ensure canvas is still valid
+            if not self.gallery_canvas.winfo_exists():
+                self.gallery_updating = False
+                return
+            
+            # Clear existing thumbnails from canvas
+            self.gallery_canvas.delete("all")
+            self.gallery_thumbnails.clear()
+            
+            # Draw thumbnails for all images asynchronously to avoid blocking
+            # This ensures all thumbnails are drawn even for large folders
+            total_images = len(self.image_files)
+            self._create_gallery_async(0, total_images)
+        except Exception as e:
+            print(f"Error updating gallery: {e}")
+            import traceback
+            traceback.print_exc()
+            self.gallery_updating = False
+    
+    def update_gallery_selection(self):
+        """Updates the gallery to highlight the currently selected image and centers it."""
+        if not self.gallery_canvas or self.current_index == -1 or not self.image_files:
+            return
+        
+        try:
+            # Ensure gallery is visible and populated
+            if not self.gallery_canvas.winfo_viewable():
+                return
+            
+            # If gallery is empty but we have images, check if it's still being created
+            if len(self.gallery_thumbnails) == 0 and len(self.image_files) > 0:
+                if not self.gallery_updating:
+                    # Gallery is empty and not being created, rebuild it
+                    self.root.after(100, lambda: self.update_gallery())
+                return
+            
+            # Remove previous selection border if it exists (using tag for easy deletion)
+            self.gallery_canvas.delete("active_selection")
+            
+            # Draw selection border for current image (ensure index is valid)
+            if 0 <= self.current_index < len(self.image_files) and self.current_index in self.gallery_thumbnails:
+                # Calculate border to exactly frame the thumbnail image
+                # Use the EXACT same calculation as _draw_thumbnail_on_canvas
+                slot_start = self.current_index * self.thumbnail_spacing
+                image_center_x = slot_start + self.thumbnail_size // 2 + self.thumbnail_padding // 2
+                
+                # The image is drawn with anchor="center" at (image_center_x, 55)
+                # So the image bounds are:
+                # Left: image_center_x - thumbnail_size/2
+                # Right: image_center_x + thumbnail_size/2
+                # Top: 55 - thumbnail_size/2
+                # Bottom: 55 + thumbnail_size/2
+                x0 = image_center_x - self.thumbnail_size // 2
+                x1 = image_center_x + self.thumbnail_size // 2
+                y0 = 55 - self.thumbnail_size // 2
+                y1 = 55 + self.thumbnail_size // 2
+                
+                # Draw clean outline border only (no fill, so thumbnail remains fully visible)
+                # Note: In Tkinter, rectangle coordinates define the rectangle bounds,
+                # and width is the thickness of the outline drawn around those bounds
+                self.gallery_canvas.create_rectangle(
+                    x0, y0,
+                    x1, y1,
+                    outline="#3498db", width=3, fill="",  # No fill, just outline
+                    tags="active_selection"
+                )
+                
+                # Update last selected index
+                self.last_gallery_selection_index = self.current_index
+                
+                # Scroll gallery to center current image (debounced)
+                self.root.after_idle(lambda idx=self.current_index: self._scroll_gallery_to_thumbnail(idx))
+        except Exception as e:
+            print(f"Error updating gallery selection: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _safe_update_gallery(self):
+        """Safely updates the gallery without clearing it unnecessarily."""
+        try:
+            if self.gallery_updating:
+                return  # Already updating, don't interfere
+            
+            if self.gallery_canvas and self.image_files:
+                # Check if canvas still exists
+                if not self.gallery_canvas.winfo_exists():
+                    return
+                
+                # Only update if gallery is actually empty (don't rebuild if partially populated)
+                total_images = len(self.image_files)
+                if len(self.gallery_thumbnails) == 0 and total_images > 0:
+                    # Gallery is completely empty, rebuild it
+                    print(f"Safe update: Gallery is empty, rebuilding for {total_images} images")
+                    self.update_gallery()
+                # Don't rebuild if gallery is partially populated - it might still be creating
+        except Exception as e:
+            print(f"Error in safe gallery update: {e}")
+            # Reset flag on error
+            self.gallery_updating = False
+    
+    def _scroll_gallery_to_thumbnail(self, index):
+        """Scrolls the gallery to center the thumbnail at the given index."""
+        if not self.gallery_canvas or not self.image_files:
+            return
+        
+        try:
+            # Ensure canvas exists
+            if not self.gallery_canvas.winfo_exists():
+                return
+            
+            if not (0 <= index < len(self.image_files)):
+                return
+            
+            # Force update to get accurate canvas size
+            self.gallery_canvas.update_idletasks()
+            
+            # Get canvas dimensions
+            canvas_width = self.gallery_canvas.winfo_width()
+            if canvas_width <= 1:
+                return  # Canvas not ready yet
+            
+            # Calculate thumbnail position using coordinate calculation
+            thumb_x = index * self.thumbnail_spacing + self.thumbnail_padding // 2
+            thumb_center_x = thumb_x + self.thumbnail_size // 2
+            
+            # Calculate total scrollable width
+            total_width = len(self.image_files) * self.thumbnail_spacing
+            
+            if total_width > canvas_width:
+                # Calculate scroll position to center the thumbnail
+                target_center = canvas_width / 2
+                scroll_offset = thumb_center_x - target_center
+                
+                # Calculate scroll position (0.0 to 1.0)
+                scroll_pos = scroll_offset / total_width
+                scroll_pos = max(0.0, min(1.0, scroll_pos))
+                
+                self.gallery_canvas.xview_moveto(scroll_pos)
+            else:
+                # All thumbnails fit, no need to scroll
+                self.gallery_canvas.xview_moveto(0)
+        except Exception as e:
+            print(f"Error scrolling gallery to thumbnail {index}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def navigate_to_image(self, index):
+        """Navigates to the image at the given index and ensures it's visible in gallery."""
+        # Strict bounds check - prevent navigation beyond valid range
+        if not self.image_files or index < 0 or index >= len(self.image_files):
+            return
+        
+        # Ensure gallery is visible and populated before navigating
+        if self.gallery_canvas:
+            try:
+                # Only rebuild if gallery is truly empty (not just updating)
+                if len(self.gallery_thumbnails) == 0 and not self.gallery_updating:
+                    # Gallery is empty, rebuild it first, then navigate
+                    self.update_gallery()
+                    self.root.after(150, lambda idx=index: self._navigate_after_gallery_ready(idx))
+                    return
+            except:
+                # If there's an error, just continue with navigation
+                pass
+        
+        self.update_image_display(index, reset_zoom=True)
+        # Load thumbnails around current position if needed
+        self.load_thumbnails_around_index(index)
+        # Ensure the clicked thumbnail is visible and centered in the gallery
+        # Use after_idle to ensure UI is updated first
+        self.root.after_idle(lambda idx=index: self._scroll_gallery_to_thumbnail(idx))
+    
+    def _navigate_after_gallery_ready(self, index):
+        """Navigates to image after gallery is ready."""
+        # Strict bounds check
+        if not self.image_files or index < 0 or index >= len(self.image_files):
+            return
+        self.update_image_display(index, reset_zoom=True)
+        self.root.after_idle(lambda idx=index: self._scroll_gallery_to_thumbnail(idx))
 
 
 if __name__ == "__main__":
