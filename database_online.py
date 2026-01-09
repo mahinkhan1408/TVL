@@ -1246,6 +1246,204 @@ class OnlineDatabaseManager:
             print(f"Error getting all checklist items: {e}")
             return {}
     
+    # ==================== Special Contractor Prices ====================
+    
+    def create_special_contractor(self, contractor_name: str, user_id: int) -> Dict:
+        """Create a new special contractor entry."""
+        try:
+            result = self.supabase.table('special_contractors').insert({
+                'contractor_name': contractor_name,
+                'user_id': user_id,
+                'updated_by': user_id,
+                'updated_at': datetime.now().isoformat()
+            }).execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"Error creating special contractor: {e}")
+            raise e
+    
+    def get_special_contractor(self, contractor_name: str) -> Optional[Dict]:
+        """Get a special contractor by name."""
+        try:
+            result = self.supabase.table('special_contractors')\
+                .select('*')\
+                .eq('contractor_name', contractor_name)\
+                .execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"Error getting special contractor: {e}")
+            return None
+    
+    def get_all_special_contractors(self) -> List[Dict]:
+        """Get all special contractors."""
+        try:
+            result = self.supabase.table('special_contractors')\
+                .select('*')\
+                .order('contractor_name', desc=False)\
+                .execute()
+            
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Error getting all special contractors: {e}")
+            return []
+    
+    def add_contractor_line_item(self, contractor_id: int, line_item: str, price: float, user_id: int) -> Dict:
+        """Add a line item to a contractor."""
+        try:
+            result = self.supabase.table('contractor_line_items').insert({
+                'contractor_id': contractor_id,
+                'line_item': line_item,
+                'price': price,
+                'user_id': user_id
+            }).execute()
+            
+            # Update contractor's updated_by and updated_at
+            self.supabase.table('special_contractors')\
+                .update({
+                    'updated_by': user_id,
+                    'updated_at': datetime.now().isoformat()
+                })\
+                .eq('id', contractor_id)\
+                .execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"Error adding contractor line item: {e}")
+            raise e
+    
+    def get_contractor_line_items(self, contractor_id: int) -> List[Dict]:
+        """Get all line items for a contractor."""
+        try:
+            result = self.supabase.table('contractor_line_items')\
+                .select('*')\
+                .eq('contractor_id', contractor_id)\
+                .order('id', desc=False)\
+                .execute()
+            
+            return result.data if result.data else []
+        except Exception as e:
+            print(f"Error getting contractor line items: {e}")
+            return []
+    
+    def update_contractor_line_item(self, item_id: int, line_item: str, price: float, user_id: int) -> bool:
+        """Update a contractor line item."""
+        try:
+            # Get contractor_id from line item
+            item_result = self.supabase.table('contractor_line_items')\
+                .select('contractor_id')\
+                .eq('id', item_id)\
+                .execute()
+            
+            if not item_result.data:
+                return False
+            
+            contractor_id = item_result.data[0]['contractor_id']
+            
+            # Update line item
+            self.supabase.table('contractor_line_items')\
+                .update({
+                    'line_item': line_item,
+                    'price': price
+                })\
+                .eq('id', item_id)\
+                .execute()
+            
+            # Update contractor's updated_by and updated_at
+            self.supabase.table('special_contractors')\
+                .update({
+                    'updated_by': user_id,
+                    'updated_at': datetime.now().isoformat()
+                })\
+                .eq('id', contractor_id)\
+                .execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error updating contractor line item: {e}")
+            return False
+    
+    def delete_contractor_line_item(self, item_id: int, user_id: int) -> bool:
+        """Delete a contractor line item."""
+        try:
+            # Get contractor_id from line item
+            item_result = self.supabase.table('contractor_line_items')\
+                .select('contractor_id')\
+                .eq('id', item_id)\
+                .execute()
+            
+            if not item_result.data:
+                return False
+            
+            contractor_id = item_result.data[0]['contractor_id']
+            
+            # Delete line item
+            self.supabase.table('contractor_line_items')\
+                .delete()\
+                .eq('id', item_id)\
+                .execute()
+            
+            # Update contractor's updated_by and updated_at
+            self.supabase.table('special_contractors')\
+                .update({
+                    'updated_by': user_id,
+                    'updated_at': datetime.now().isoformat()
+                })\
+                .eq('id', contractor_id)\
+                .execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error deleting contractor line item: {e}")
+            return False
+    
+    def delete_special_contractor(self, contractor_id: int) -> bool:
+        """Delete a special contractor and all its line items."""
+        try:
+            # Delete all line items first
+            self.supabase.table('contractor_line_items')\
+                .delete()\
+                .eq('contractor_id', contractor_id)\
+                .execute()
+            
+            # Delete contractor
+            self.supabase.table('special_contractors')\
+                .delete()\
+                .eq('id', contractor_id)\
+                .execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error deleting special contractor: {e}")
+            return False
+    
+    def get_contractor_with_items(self, contractor_id: int) -> Optional[Dict]:
+        """Get a contractor with all its line items."""
+        try:
+            contractor_result = self.supabase.table('special_contractors')\
+                .select('*')\
+                .eq('id', contractor_id)\
+                .execute()
+            
+            if not contractor_result.data:
+                return None
+            
+            contractor = contractor_result.data[0]
+            line_items = self.get_contractor_line_items(contractor_id)
+            contractor['line_items'] = line_items
+            
+            return contractor
+        except Exception as e:
+            print(f"Error getting contractor with items: {e}")
+            return None
+    
     # ==================== Password Utilities ====================
     
     # Password hashing methods - no longer used, passwords stored in plain text

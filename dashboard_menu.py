@@ -5,7 +5,6 @@ from bid_writer_module import BidWriterApp
 from notice_board_module import NoticeBoardModule
 from vendor_price_module import VendorPriceModule
 from gc_roof_ce_module import GCRoofCEModule
-from todo_module import ModernToDoApp
 from letterhead_bid_module import LetterheadBidModule
 from approval_module import ApprovalModule
 from wo_inspection_module import WOInspectionModule
@@ -72,7 +71,6 @@ class DashboardMenu:
         nav_buttons = [
             ("Dashboard", self.show_dashboard_content),
             ("Bid Writer", self.show_bid_writer_dashboard),
-            ("To-Do", self.open_todo),
             ("Letterhead Bid", self.open_letterhead_bid),
             ("Notice Board", self.open_notice_board),
             ("Vendor Price", self.open_vendor_price),
@@ -244,7 +242,7 @@ class DashboardMenu:
 
         # Card definitions in requested serial
         # New bid, Open project, GC/Roof CE, Price Sheet, Letterheads,
-        # Notice Boards, To-Do, Photo Viewer, Approval, WO Inspection, Settings
+        # Notice Boards, Photo Viewer, Approval, WO Inspection, Settings
         cards = [
             ("New Bid", "Create a new bid", "🆕", self.create_new_bid),
             ("Open Project", "Continue your saved work", "📂", self.show_bid_writer_dashboard),
@@ -252,7 +250,6 @@ class DashboardMenu:
             ("Price Sheet", "Client and Vendor", "💲", self.show_price_sheet_page),
             ("Letterheads", "Letterhead bids", "📝", self.open_letterhead_bid),
             ("Notice Boards", "Announcements", "📢", self.open_notice_board),
-            ("To-Do", "Tasks & reminders", "✅", self.open_todo),
             ("Photo Viewer", "View and edit images", "🖼️", self.open_photo_viewer),
             ("Approval", "Approval workflow", "✔️", self.open_approval),
             ("WO Inspection", "Work order inspections", "🔍", self.open_wo_inspection),
@@ -1550,8 +1547,32 @@ class DashboardMenu:
         VendorPriceModule(new_window)
 
     def open_special_contractor_price(self):
-        """Open Special Contractor Price module (placeholder)"""
-        messagebox.showinfo("Coming Soon", "Special Contractor Price module is coming soon.")
+        """Open Special Contractor Price module in a new window"""
+        try:
+            from special_contractor_price_module import SpecialContractorPriceModule
+            new_window = tk.Toplevel(self.root)
+            new_window.title("Special Contractor Prices")
+            new_window.geometry("1200x800")
+            new_window.configure(bg=self.colors['background'])
+            
+            # Center the window
+            new_window.update_idletasks()
+            x = (new_window.winfo_screenwidth() // 2) - (new_window.winfo_width() // 2)
+            y = (new_window.winfo_screenheight() // 2) - (new_window.winfo_height() // 2)
+            new_window.geometry(f"+{x}+{y}")
+            
+            # Create module in new window
+            SpecialContractorPriceModule(
+                new_window,
+                username=self.username,
+                user_id=self.user_id if hasattr(self, 'user_id') else None,
+                colors=self.colors,
+                db=self.db
+            )
+        except ImportError as e:
+            messagebox.showerror("Error", f"Failed to import Special Contractor Price module: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open Special Contractor Price module: {e}")
 
     def open_client_allowables(self):
         """Open Client Allowables module (placeholder)"""
@@ -1572,10 +1593,6 @@ class DashboardMenu:
         new_window = tk.Toplevel(self.root)
         FastImageViewer(new_window)
 
-    def open_todo(self):
-        new_window = tk.Toplevel(self.root)
-        ModernToDoApp(new_window, user_id=self.user_id if hasattr(self, 'user_id') else None)
-    
     def open_approval(self):
         self.clear_content_frame()
         approval_frame = tk.Frame(self.main_content_frame, bg=self.colors['background'], padx=20, pady=20)

@@ -1,0 +1,168 @@
+{
+  "contractors_data": {
+    "11wq1": {
+      "id": 5,
+      "line_items": [
+        {
+          "id": 16,
+          "contractor_id": 5,
+          "line_item": "sdsds",
+          "price": 33.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:18:31.929552+00:00"
+        },
+        {
+          "id": 17,
+          "contractor_id": 5,
+          "line_item": "sfs",
+          "price": 55.0,
+          "user_id": 4,
+          "created_at": "2026-01-09T00:00:19.300729+00:00"
+        }
+      ],
+      "updated_by": 4,
+      "updated_at": "2026-01-08T19:00:26.171517+00:00"
+    },
+    "karim Benzema": {
+      "id": 2,
+      "line_items": [
+        {
+          "id": 5,
+          "contractor_id": 2,
+          "line_item": "dsfg",
+          "price": 444.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T21:59:11.353702+00:00"
+        },
+        {
+          "id": 6,
+          "contractor_id": 2,
+          "line_item": "wsd",
+          "price": 0.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T22:46:46.539546+00:00"
+        },
+        {
+          "id": 7,
+          "contractor_id": 2,
+          "line_item": "dddd",
+          "price": 34.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:04:53.294949+00:00"
+        },
+        {
+          "id": 9,
+          "contractor_id": 2,
+          "line_item": "sds",
+          "price": 123.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:08:27.889595+00:00"
+        },
+        {
+          "id": 10,
+          "contractor_id": 2,
+          "line_item": "qww",
+          "price": 0.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:08:38.351346+00:00"
+        },
+        {
+          "id": 11,
+          "contractor_id": 2,
+          "line_item": "qaqa",
+          "price": 12.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:08:50.521223+00:00"
+        },
+        {
+          "id": 15,
+          "contractor_id": 2,
+          "line_item": "11",
+          "price": 11211.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:18:18.753779+00:00"
+        }
+      ],
+      "updated_by": 4,
+      "updated_at": "2026-01-08T19:38:51.158318+00:00"
+    },
+    "kentukanrna": {
+      "id": 6,
+      "line_items": [
+        {
+          "id": 18,
+          "contractor_id": 6,
+          "line_item": "sell jacob",
+          "price": 599.0,
+          "user_id": 4,
+          "created_at": "2026-01-09T00:44:54.465248+00:00"
+        },
+        {
+          "id": 19,
+          "contractor_id": 6,
+          "line_item": "sell harry",
+          "price": 100.0,
+          "user_id": 4,
+          "created_at": "2026-01-09T00:45:53.816999+00:00"
+        }
+      ],
+      "updated_by": 4,
+      "updated_at": "2026-01-08T19:45:53.875707+00:00"
+    },
+    "mahin": {
+      "id": 4,
+      "line_items": [
+        {
+          "id": 8,
+          "contractor_id": 4,
+          "line_item": "ddddsss",
+          "price": 45.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:05:09.000071+00:00"
+        },
+        {
+          "id": 12,
+          "contractor_id": 4,
+          "line_item": "www",
+          "price": 111.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:09:06.923303+00:00"
+        },
+        {
+          "id": 13,
+          "contractor_id": 4,
+          "line_item": "22wq",
+          "price": 0.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:09:15.591325+00:00"
+        },
+        {
+          "id": 14,
+          "contractor_id": 4,
+          "line_item": "221ws",
+          "price": 11.0,
+          "user_id": 4,
+          "created_at": "2026-01-08T23:18:09.076136+00:00"
+        }
+      ],
+      "updated_by": 4,
+      "updated_at": "2026-01-08T18:18:10.567881+00:00"
+    },
+    "test": {
+      "id": 7,
+      "line_items": [
+        {
+          "id": 20,
+          "contractor_id": 7,
+          "line_item": "sss",
+          "price": 23.0,
+          "user_id": 4,
+          "created_at": "2026-01-09T20:45:27.529705+00:00"
+        }
+      ],
+      "updated_by": 4,
+      "updated_at": "2026-01-09T15:45:27.827395"
+    }
+  },
+  "saved_at": "2026-01-09T15:45:27.828129"
+}
