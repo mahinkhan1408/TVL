@@ -12,6 +12,16 @@ from theme_manager import theme_manager
 import sys
 import os
 import importlib.util
+import webbrowser
+
+# Try to import PIL for image handling
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    Image = None
+    ImageTk = None
 # Import Photo Viewer - handle the space in filename
 photo_viewer_path = os.path.join(os.path.dirname(__file__), "Photo Viewer.py")
 if os.path.exists(photo_viewer_path):
@@ -364,10 +374,148 @@ class DashboardMenu:
         
         self.recent_bids_list = recent_scrollable_frame
         
-        # Initial load of bids
-        self.load_recent_bids()
-
-    def load_recent_bids(self, search_term=None):
+        # Initialize cache for projects
+        self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
+        os.makedirs(self.app_data_dir, exist_ok=True)
+        self.projects_cache_file = os.path.join(self.app_data_dir, "projects_cache.json")
+        
+        # Initial load of bids (from cache first, then database)
+        self.load_recent_bids_async()
+        
+        # Start frequent auto-refresh (every 30 seconds = 30000 milliseconds)
+        self.projects_refresh_interval = 30 * 1000  # 30 seconds
+        self.start_projects_auto_refresh()
+    
+    def load_recent_bids_async(self, search_term=None):
+        """Load bids asynchronously - show cache first, then update from database"""
+        # Load from cache first for instant display
+        cache_bids = self.load_projects_from_cache(search_term)
+        if cache_bids:
+            self.display_bids(cache_bids, search_term)
+            print(f"Loaded {len(cache_bids)} projects from cache (instant display)")
+        
+        # Then load from database in background and update
+        def load_in_thread():
+            bids = []
+            
+            # Try to load from database
+            if self.db and self.user_id:
+                try:
+                    print("Loading projects from database...")
+                    # Get search term from entry if not provided
+                    if search_term is None:
+                        search_term = self.search_entry.get().strip() if hasattr(self, 'search_entry') else ""
+                    filter_type = self.search_filter.get() if hasattr(self, 'search_filter') else "all"
+                    
+                    # Load from Supabase with search - show all projects from all users
+                    if search_term:
+                        if filter_type == "work_order":
+                            bids = self.db.search_bids_by_wo_number(self.user_id, search_term, all_bids=True)
+                        elif filter_type == "property_address":
+                            bids = self.db.search_bids_by_property_address(self.user_id, search_term, all_bids=True)
+                        else:  # "all"
+                            # Search both
+                            wo_bids = self.db.search_bids_by_wo_number(self.user_id, search_term, all_bids=True)
+                            addr_bids = self.db.search_bids_by_property_address(self.user_id, search_term, all_bids=True)
+                            # Combine and deduplicate by wo_number
+                            bids_dict = {}
+                            for bid in wo_bids + addr_bids:
+                                bids_dict[bid['wo_number']] = bid
+                            bids = list(bids_dict.values())
+                    else:
+                        bids = self.db.get_user_bids(self.user_id, all_bids=True)
+                    
+                    # Sort by updated_at descending
+                    bids.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+                    
+                    print(f"Found {len(bids)} projects in database")
+                    
+                    # Save to cache after successful load (only if no search term)
+                    if not search_term:
+                        self.save_projects_to_cache(bids)
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"Error loading projects from database: {error_msg}")
+                    # Fall back to cache if database fails
+                    bids = self.load_projects_from_cache(search_term)
+                    if bids:
+                        print(f"Using cached projects (offline mode): {len(bids)} projects")
+            
+            # If no database, try cache
+            if not bids:
+                bids = self.load_projects_from_cache(search_term)
+            
+            # Update UI in main thread
+            def update_ui():
+                if bids:
+                    self.display_bids(bids, search_term)
+                    # Show notification if updated from database
+                    if self.db and len(bids) != len(cache_bids if cache_bids else []):
+                        print(f"Updated projects: {len(cache_bids if cache_bids else [])} -> {len(bids)}")
+            
+            self.root.after(0, update_ui)
+        
+        # Start loading in background thread
+        thread = threading.Thread(target=load_in_thread, daemon=True)
+        thread.start()
+    
+    def start_projects_auto_refresh(self):
+        """Start frequent auto-refresh for projects list"""
+        if hasattr(self.root, 'after'):
+            self.root.after(self.projects_refresh_interval, self.projects_auto_refresh_callback)
+    
+    def projects_auto_refresh_callback(self):
+        """Auto-refresh callback for projects list"""
+        try:
+            # Only refresh if the bid writer dashboard is currently shown
+            if hasattr(self, 'recent_bids_list') and self.recent_bids_list.winfo_exists():
+                print("Auto-refreshing projects list...")
+                self.load_recent_bids_async()
+        except Exception as e:
+            print(f"Error in projects auto-refresh: {e}")
+        
+        # Schedule next refresh
+        self.start_projects_auto_refresh()
+    
+    def save_projects_to_cache(self, bids):
+        """Save projects list to local cache"""
+        try:
+            with open(self.projects_cache_file, 'w') as f:
+                json.dump(bids, f, indent=2)
+            print(f"Saved {len(bids)} projects to cache")
+        except Exception as e:
+            print(f"Error saving projects to cache: {e}")
+    
+    def load_projects_from_cache(self, search_term=None):
+        """Load projects list from local cache, optionally filtered by search"""
+        try:
+            if os.path.exists(self.projects_cache_file):
+                with open(self.projects_cache_file, 'r') as f:
+                    bids = json.load(f)
+                
+                # Filter by search term if provided
+                if search_term and search_term.strip():
+                    search_term_lower = search_term.lower()
+                    filtered_bids = []
+                    for bid in bids:
+                        wo_number = bid.get('wo_number', '').lower()
+                        property_address = bid.get('property_address', '').lower()
+                        if search_term_lower in wo_number or search_term_lower in property_address:
+                            filtered_bids.append(bid)
+                    bids = filtered_bids
+                
+                print(f"Loaded {len(bids)} projects from cache")
+                return bids
+        except Exception as e:
+            print(f"Error loading projects from cache: {e}")
+        return []
+    
+    def display_bids(self, bids, search_term=None):
+        """Display bids in the UI - calls load_recent_bids with pre-loaded data"""
+        # Call load_recent_bids with pre-loaded bids data to skip database query
+        self.load_recent_bids(search_term=search_term, bids_data=bids)
+    
+    def load_recent_bids(self, search_term=None, bids_data=None):
         for widget in self.recent_bids_list.winfo_children():
             widget.destroy()
         
@@ -404,7 +552,12 @@ class DashboardMenu:
             tk.Label(header_frame, text=header, font=("Arial", 11, "bold"), fg='white', bg=self.colors['primary_blue'], padx=8, pady=8, anchor='w', justify='left').grid(row=0, column=i, sticky='nsw')
 
         try:
-            if self.db and self.user_id:
+            # Use provided bids_data if available (from cache), otherwise load from database
+            if bids_data is not None:
+                bids = bids_data
+                # Sort by updated_at descending
+                bids.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+            elif self.db and self.user_id:
                 # Get search term from entry if not provided
                 if search_term is None:
                     search_term = self.search_entry.get().strip() if hasattr(self, 'search_entry') else ""
@@ -431,11 +584,17 @@ class DashboardMenu:
                 # Sort by updated_at descending
                 bids.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
                 
-                if not bids:
-                    tk.Label(self.recent_bids_list, text="No matching projects found." if search_term else "No projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
-                    return
-                
-                for bid in bids:
+                # Save to cache after database load (only if no search term)
+                if not search_term:
+                    self.save_projects_to_cache(bids)
+            else:
+                bids = []
+            
+            if not bids:
+                tk.Label(self.recent_bids_list, text="No matching projects found." if search_term else "No projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
+                return
+            
+            for bid in bids:
                     wo_number = bid['wo_number']
                     
                     # Load full bid data to get all fields including property_address, client_code, wo_type
@@ -1759,6 +1918,124 @@ class DashboardMenu:
                 font=("Arial", 9), 
                 fg=self.colors['text_secondary'], 
                 bg=self.colors['white']).pack(anchor='w')
+        
+        # Strategix Developer Section
+        # Use a light blue background that complements the theme
+        # Light theme: light blue, Dark theme: darker blue-gray
+        if self.colors.get('background', '').startswith('#f') or self.colors.get('background') == '#f8f9fa':
+            light_blue_bg = '#e8f0f8'  # Light blue for light theme
+        else:
+            light_blue_bg = '#2a3a4f'  # Darker blue-gray for dark theme
+        strategix_section = tk.Frame(settings_container, bg=light_blue_bg, relief="solid", bd=1)
+        strategix_section.pack(fill='x', pady=(0, 20))
+        
+        strategix_content = tk.Frame(strategix_section, bg=light_blue_bg)
+        strategix_content.pack(fill='x', padx=30, pady=20)
+        
+        # Create clickable container for logo and text
+        def open_strategix_url(event=None):
+            webbrowser.open("https://strategixdigi.com/")
+        
+        strategix_container = tk.Frame(strategix_content, bg=light_blue_bg, cursor='hand2')
+        strategix_container.pack(anchor='center', pady=10)
+        
+        # Try to load logo image if available
+        logo_path = os.path.join(os.path.dirname(__file__), "strategix_logo.png")
+        logo_displayed = False
+        
+        if PIL_AVAILABLE and os.path.exists(logo_path):
+            try:
+                # Load and resize logo (original size: 856x114 px)
+                logo_image = Image.open(logo_path)
+                # Resize to appropriate size (max width 400px, max height 60px, maintain aspect ratio)
+                # The logo is wide, so we'll use a wider constraint
+                logo_image.thumbnail((400, 60), Image.Resampling.LANCZOS)
+                logo_photo = ImageTk.PhotoImage(logo_image)
+                
+                logo_label = tk.Label(strategix_container, image=logo_photo, bg=light_blue_bg, cursor='hand2')
+                logo_label.image = logo_photo  # Keep a reference
+                logo_label.pack(anchor='center', pady=(0, 10))
+                logo_label.bind('<Button-1>', open_strategix_url)
+                strategix_container.bind('<Button-1>', open_strategix_url)
+                logo_displayed = True
+            except Exception as e:
+                print(f"Could not load Strategix logo: {e}")
+        
+        # If logo not displayed, create a simple colored representation
+        if not logo_displayed:
+            # Create a simple logo representation with colored frames
+            logo_frame = tk.Frame(strategix_container, bg=light_blue_bg, cursor='hand2')
+            logo_frame.pack(anchor='center', pady=(0, 10))
+            
+            # Left side - abstract symbol representation (green shapes)
+            symbol_frame = tk.Frame(logo_frame, bg=light_blue_bg, cursor='hand2')
+            symbol_frame.pack(side='left', padx=(0, 20))
+            
+            # Create simple representation with colored rectangles (approximation of logo)
+            dark_green = "#2d5016"  # Dark green
+            light_green = "#7cb342"  # Light green
+            
+            # Bottom larger shape (dark green)
+            shape1 = tk.Frame(symbol_frame, bg=dark_green, width=40, height=25, cursor='hand2')
+            shape1.pack(side='left', padx=2)
+            shape1.pack_propagate(False)
+            
+            # Top overlapping shape (light green)
+            shape2 = tk.Frame(symbol_frame, bg=light_green, width=35, height=20, cursor='hand2')
+            shape2.pack(side='left', padx=2)
+            shape2.pack_propagate(False)
+            
+            # Right side - X letter (light green)
+            x_label = tk.Label(logo_frame, text="X", font=("Arial", 32, "bold"), 
+                              fg=light_green, bg=light_blue_bg, cursor='hand2')
+            x_label.pack(side='left')
+            
+            # Bind all logo elements
+            for widget in [symbol_frame, shape1, shape2, x_label]:
+                widget.bind('<Button-1>', open_strategix_url)
+            logo_frame.bind('<Button-1>', open_strategix_url)
+        
+        # "Developed BY Strategix" text
+        developed_label = tk.Label(strategix_container, text="Developed BY Strategix", 
+                                  font=("Arial", 12, "bold"), 
+                                  fg=self.colors['text_primary'], 
+                                  bg=light_blue_bg,
+                                  cursor='hand2')
+        developed_label.pack(anchor='center', pady=(5, 0))
+        developed_label.bind('<Button-1>', open_strategix_url)
+        
+        # Hover effects for the container
+        def on_enter(widget):
+            # Slightly darker blue on hover
+            hover_bg = '#d0e0f0' if light_blue_bg == '#e8f0f8' else '#3a4a5f'
+            widget.configure(bg=hover_bg)
+        def on_leave(widget):
+            widget.configure(bg=light_blue_bg)
+        
+        # Update hover effects to change background of all child widgets
+        def on_enter_all(event=None):
+            hover_bg = '#d0e0f0' if light_blue_bg == '#e8f0f8' else '#3a4a5f'
+            strategix_container.configure(bg=hover_bg)
+            strategix_content.configure(bg=hover_bg)
+            strategix_section.configure(bg=hover_bg)
+            if logo_displayed and 'logo_label' in locals():
+                logo_label.configure(bg=hover_bg)
+            if 'developed_label' in locals():
+                developed_label.configure(bg=hover_bg)
+        
+        def on_leave_all(event=None):
+            strategix_container.configure(bg=light_blue_bg)
+            strategix_content.configure(bg=light_blue_bg)
+            strategix_section.configure(bg=light_blue_bg)
+            if logo_displayed and 'logo_label' in locals():
+                logo_label.configure(bg=light_blue_bg)
+            if 'developed_label' in locals():
+                developed_label.configure(bg=light_blue_bg)
+        
+        strategix_container.bind('<Enter>', on_enter_all)
+        strategix_container.bind('<Leave>', on_leave_all)
+        strategix_content.bind('<Enter>', on_enter_all)
+        strategix_content.bind('<Leave>', on_leave_all)
 
     # --- Helper: Back bar for in-page sections ---
     def _add_back_bar(self, parent, title_text=""):

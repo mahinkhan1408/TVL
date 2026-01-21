@@ -6,6 +6,7 @@ from datetime import datetime
 import tempfile
 import shutil
 import json
+import threading
 from theme_manager import theme_manager
 
 try:
@@ -36,11 +37,16 @@ class LetterheadBidModule:
         # Register for theme updates
         theme_manager.register_theme_callback(self.on_theme_changed)
         
-        # Setup UI
+        # Local cache file path
+        self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
+        os.makedirs(self.app_data_dir, exist_ok=True)
+        self.cache_file = os.path.join(self.app_data_dir, "letterhead-files.json")
+        
+        # Setup UI first for fast opening
         self.setup_ui()
         
-        # Load files
-        self.load_files()
+        # Load files asynchronously after UI is ready (non-blocking)
+        self.root.after(10, self.load_files_async)
     
     def on_theme_changed(self, theme_name, colors):
         """Called when theme is changed globally."""
@@ -50,7 +56,7 @@ class LetterheadBidModule:
         for widget in self.root.winfo_children():
             widget.destroy()
         self.setup_ui()
-        self.load_files()
+        self.load_files_async()
     
     def setup_ui(self):
         """Create main user interface with Estimate and Invoice sections"""
@@ -263,28 +269,23 @@ class LetterheadBidModule:
                     file_id = self.db.save_letterhead_file(self.user_id, file_data)
                     print(f"File saved with ID: {file_id}")
                 else:
-                    # Save to local JSON file if database/user_id not available
-                    local_data_file = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter", "letterhead-files.json")
-                    all_files = []
-                    if os.path.exists(local_data_file):
-                        try:
-                            with open(local_data_file, 'r') as f:
-                                all_files = json.load(f)
-                        except:
-                            all_files = []
-                    
+                    # Save to local cache if database/user_id not available
+                    all_files = self.load_from_cache()
                     file_data['id'] = len(all_files) + 1
                     file_data['created_at'] = datetime.now().isoformat()
                     all_files.append(file_data)
-                    
-                    os.makedirs(os.path.dirname(local_data_file), exist_ok=True)
-                    with open(local_data_file, 'w') as f:
-                        json.dump(all_files, f, indent=2)
+                    self.save_to_cache(all_files)
                     print(f"File saved locally (database not available)")
+                
+                # If database upload succeeded, refresh from database to update cache
+                if self.db and self.user_id:
+                    # Cache will be updated when reloading
+                    pass
                 
                 dialog.destroy()
                 messagebox.showinfo("Success", f"File uploaded successfully!")
-                self.load_files()
+                # Reload files (will update cache automatically)
+                self.load_files_async()
                 
             except Exception as e:
                 error_msg = str(e)
@@ -380,7 +381,8 @@ class LetterheadBidModule:
                     print(f"Error deleting local file: {e}")
             
             messagebox.showinfo("Success", "File deleted successfully!")
-            self.load_files()
+            # Reload files (will update cache automatically)
+            self.load_files_async()
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to delete file: {e}")
@@ -450,8 +452,93 @@ class LetterheadBidModule:
                               command=lambda: self.delete_file(file_data))
         delete_btn.place(x=180, y=5)
     
-    def load_files(self):
-        """Load and display files for both sections"""
+    def load_files_async(self):
+        """Load files asynchronously to prevent UI blocking"""
+        # Show loading message
+        self.show_loading_message()
+        
+        def load_in_thread():
+            estimate_files = []
+            invoice_files = []
+            
+            # Try to load from database first
+            if self.db:
+                try:
+                    print("Loading letterhead files from database...")
+                    # Load all files at once, then filter
+                    all_files = self.db.get_letterhead_files(None)  # None = all categories
+                    if all_files:
+                        estimate_files = [f for f in all_files if f.get('category') == 'Estimate']
+                        invoice_files = [f for f in all_files if f.get('category') == 'Invoice']
+                        print(f"Found {len(estimate_files)} Estimate and {len(invoice_files)} Invoice files in database")
+                        
+                        # Save to cache after successful load
+                        self.save_to_cache(all_files)
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"Error loading files from database: {error_msg}")
+                    # Fall back to cache
+                    all_files = self.load_from_cache()
+                    if all_files:
+                        estimate_files = [f for f in all_files if f.get('category') == 'Estimate']
+                        invoice_files = [f for f in all_files if f.get('category') == 'Invoice']
+                        print(f"Loaded {len(estimate_files)} Estimate and {len(invoice_files)} Invoice files from cache (offline mode)")
+            
+            # If no database, try local cache
+            if not estimate_files and not invoice_files:
+                all_files = self.load_from_cache()
+                if all_files:
+                    estimate_files = [f for f in all_files if f.get('category') == 'Estimate']
+                    invoice_files = [f for f in all_files if f.get('category') == 'Invoice']
+                    print(f"Loaded {len(estimate_files)} Estimate and {len(invoice_files)} Invoice files from local cache")
+            
+            # Update UI in main thread
+            def update_ui():
+                self.hide_loading_message()
+                self.display_files(estimate_files, invoice_files)
+            
+            self.root.after(0, update_ui)
+        
+        # Start loading in background thread
+        thread = threading.Thread(target=load_in_thread, daemon=True)
+        thread.start()
+    
+    def show_loading_message(self):
+        """Show loading message in both sections"""
+        loading_text = "Loading files..."
+        if hasattr(self, 'estimate_scrollable_frame'):
+            loading_label = tk.Label(self.estimate_scrollable_frame, 
+                                    text=loading_text,
+                                    font=("Segoe UI", 12),
+                                    bg=self.colors.get('white', '#FFFFFF'),
+                                    fg=self.colors.get('text_secondary', '#6B7280'))
+            loading_label.pack(pady=20)
+            self.estimate_loading_label = loading_label
+        
+        if hasattr(self, 'invoice_scrollable_frame'):
+            loading_label = tk.Label(self.invoice_scrollable_frame, 
+                                    text=loading_text,
+                                    font=("Segoe UI", 12),
+                                    bg=self.colors.get('white', '#FFFFFF'),
+                                    fg=self.colors.get('text_secondary', '#6B7280'))
+            loading_label.pack(pady=20)
+            self.invoice_loading_label = loading_label
+    
+    def hide_loading_message(self):
+        """Hide loading message"""
+        if hasattr(self, 'estimate_loading_label'):
+            try:
+                self.estimate_loading_label.destroy()
+            except:
+                pass
+        if hasattr(self, 'invoice_loading_label'):
+            try:
+                self.invoice_loading_label.destroy()
+            except:
+                pass
+    
+    def display_files(self, estimate_files, invoice_files):
+        """Display files in the UI"""
         # Clear existing files
         if hasattr(self, 'estimate_scrollable_frame'):
             for widget in self.estimate_scrollable_frame.winfo_children():
@@ -461,47 +548,58 @@ class LetterheadBidModule:
             for widget in self.invoice_scrollable_frame.winfo_children():
                 widget.destroy()
         
-        estimate_files = []
-        invoice_files = []
-        
-        # Try to load from database first
-        if self.db:
-            try:
-                print("Loading Estimate files from database...")
-                estimate_files = self.db.get_letterhead_files('Estimate')
-                print(f"Found {len(estimate_files)} Estimate files in database")
-                
-                print("Loading Invoice files from database...")
-                invoice_files = self.db.get_letterhead_files('Invoice')
-                print(f"Found {len(invoice_files)} Invoice files in database")
-            except Exception as e:
-                error_msg = str(e)
-                print(f"Error loading files from database: {error_msg}")
-                import traceback
-                traceback.print_exc()
-        
-        # If no database or no files found, try local JSON
-        if not estimate_files and not invoice_files:
-            local_data_file = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter", "letterhead-files.json")
-            if os.path.exists(local_data_file):
-                try:
-                    with open(local_data_file, 'r') as f:
-                        all_files = json.load(f)
-                        estimate_files = [f for f in all_files if f.get('category') == 'Estimate']
-                        invoice_files = [f for f in all_files if f.get('category') == 'Invoice']
-                        print(f"Loaded {len(estimate_files)} Estimate and {len(invoice_files)} Invoice files from local storage")
-                except Exception as e:
-                    print(f"Error loading local files: {e}")
-        
         # Display Estimate files
         if hasattr(self, 'estimate_scrollable_frame'):
-            for file_data in estimate_files:
-                self.create_file_card(self.estimate_scrollable_frame, file_data)
+            if estimate_files:
+                for file_data in estimate_files:
+                    self.create_file_card(self.estimate_scrollable_frame, file_data)
+            else:
+                empty_label = tk.Label(self.estimate_scrollable_frame,
+                                      text="No Estimate files yet.\nClick '+ Upload File' to add one.",
+                                      font=("Segoe UI", 11),
+                                      bg=self.colors.get('white', '#FFFFFF'),
+                                      fg=self.colors.get('text_secondary', '#6B7280'),
+                                      justify='center')
+                empty_label.pack(pady=20)
         
         # Display Invoice files
         if hasattr(self, 'invoice_scrollable_frame'):
-            for file_data in invoice_files:
-                self.create_file_card(self.invoice_scrollable_frame, file_data)
+            if invoice_files:
+                for file_data in invoice_files:
+                    self.create_file_card(self.invoice_scrollable_frame, file_data)
+            else:
+                empty_label = tk.Label(self.invoice_scrollable_frame,
+                                      text="No Invoice files yet.\nClick '+ Upload File' to add one.",
+                                      font=("Segoe UI", 11),
+                                      bg=self.colors.get('white', '#FFFFFF'),
+                                      fg=self.colors.get('text_secondary', '#6B7280'),
+                                      justify='center')
+                empty_label.pack(pady=20)
+    
+    def save_to_cache(self, files):
+        """Save files to local cache"""
+        try:
+            with open(self.cache_file, 'w') as f:
+                json.dump(files, f, indent=2)
+            print(f"Saved {len(files)} files to cache")
+        except Exception as e:
+            print(f"Error saving to cache: {e}")
+    
+    def load_from_cache(self):
+        """Load files from local cache"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r') as f:
+                    files = json.load(f)
+                    print(f"Loaded {len(files)} files from cache")
+                    return files
+        except Exception as e:
+            print(f"Error loading from cache: {e}")
+        return []
+    
+    def load_files(self):
+        """Legacy method for theme changes - now calls async version"""
+        self.load_files_async()
 
 if __name__ == "__main__":
     root = tk.Tk()

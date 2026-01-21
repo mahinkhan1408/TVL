@@ -4,6 +4,7 @@ from tkinter import messagebox
 from datetime import datetime, timedelta
 import os
 import json
+import threading
 try:
     import pytz
     PYTZ_AVAILABLE = True
@@ -47,14 +48,19 @@ class NoticeBoardModule:
         # Load viewed notices from local storage
         self.load_viewed_notices()
         
+        # Local cache file path
+        self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
+        os.makedirs(self.app_data_dir, exist_ok=True)
+        self.cache_file = os.path.join(self.app_data_dir, "notices_cache.json")
+        
         # Top section: Categories and Add Notice button
         self.create_header()
         
         # Main content area: 3-column grid for notices
         self.create_notice_grid()
         
-        # Load notices
-        self.load_notices()
+        # Load notices from cache first (instant display), then from database (background update)
+        self.load_notices_async()
         
         # Start auto-refresh timer (20 minutes = 1200000 milliseconds)
         self.auto_refresh_interval = 20 * 60 * 1000  # 20 minutes in milliseconds
@@ -112,8 +118,8 @@ class NoticeBoardModule:
                 else:
                     btn.config(bg=self.colors['gray_light'], fg=self.colors['gray_dark'])
         
-        # Reload notices with filter
-        self.load_notices()
+        # Reload notices with filter (use cache first, then update from database)
+        self.load_notices_async()
     
     def create_notice_grid(self):
         """Create scrollable 2-column grid for notices"""
@@ -170,13 +176,33 @@ class NoticeBoardModule:
     
     def start_auto_refresh(self):
         """Start auto-refresh timer to check for new notices every 20 minutes"""
-        if hasattr(self.parent_frame, 'winfo_toplevel'):
+        # Check if parent frame still exists
+        if not hasattr(self, 'parent_frame'):
+            return
+        try:
+            # Check if widget is still valid
+            if not self.parent_frame.winfo_exists():
+                return
             root = self.parent_frame.winfo_toplevel()
-            if root:
+            if root and root.winfo_exists():
                 root.after(self.auto_refresh_interval, self.auto_refresh_callback)
+        except tk.TclError:
+            # Widget has been destroyed, stop auto-refresh
+            return
     
     def auto_refresh_callback(self):
         """Callback for auto-refresh - reload notices and check for new ones"""
+        # Check if module is still active before proceeding
+        if not hasattr(self, 'parent_frame') or not hasattr(self, 'scrollable_frame'):
+            return
+        try:
+            # Check if widgets are still valid
+            if not self.parent_frame.winfo_exists() or not self.scrollable_frame.winfo_exists():
+                return
+        except tk.TclError:
+            # Widgets have been destroyed, stop auto-refresh
+            return
+        
         try:
             # Get current viewed notice IDs from local storage
             app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
@@ -205,15 +231,30 @@ class NoticeBoardModule:
                     # No new notices
                     self.save_new_notices_indicator(False)
                 
-                # Reload the display
-                self.load_notices()
+                # Reload the display (will update cache automatically) - only if widget still exists
+                try:
+                    if self.scrollable_frame.winfo_exists():
+                        self.load_notices_async()
+                except tk.TclError:
+                    # Widget destroyed, stop refresh
+                    return
             
-            # Schedule next refresh
-            self.start_auto_refresh()
+            # Schedule next refresh only if module is still active
+            try:
+                if self.parent_frame.winfo_exists():
+                    self.start_auto_refresh()
+            except tk.TclError:
+                # Widget destroyed, stop refresh
+                return
         except Exception as e:
             print(f"Error in auto-refresh: {e}")
-            # Still schedule next refresh even on error
-            self.start_auto_refresh()
+            # Only schedule next refresh if module is still active
+            try:
+                if hasattr(self, 'parent_frame') and self.parent_frame.winfo_exists():
+                    self.start_auto_refresh()
+            except (tk.TclError, AttributeError):
+                # Widget destroyed, stop refresh
+                return
     
     def save_new_notices_indicator(self, has_new):
         """Save indicator that new notices exist (for dashboard card)"""
@@ -254,49 +295,134 @@ class NoticeBoardModule:
         except Exception as e:
             print(f"Error clearing new notices indicator: {e}")
     
-    def load_notices(self):
-        """Load notices from database"""
-        # Clear existing notices
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
+    def load_notices_async(self):
+        """Load notices asynchronously - show cache first, then update from database"""
+        # Load from cache first for instant display
+        cache_notices = self.load_from_cache()
+        if cache_notices:
+            self.display_notices(cache_notices)
+            print(f"Loaded {len(cache_notices)} notices from cache (instant display)")
         
-        if not self.db:
-            tk.Label(self.scrollable_frame, text="Database not available", 
+        # Then load from database in background and update
+        def load_in_thread():
+            notices = []
+            
+            # Try to load from database
+            if self.db:
+                try:
+                    print("Loading notices from database...")
+                    notices = self.db.get_all_notices()
+                    print(f"Found {len(notices)} notices in database")
+                    
+                    # Save to cache after successful load
+                    self.save_to_cache(notices)
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"Error loading notices from database: {error_msg}")
+                    # Fall back to cache if database fails
+                    notices = self.load_from_cache()
+                    if notices:
+                        print(f"Using cached notices (offline mode): {len(notices)} notices")
+            
+            # If no database or load failed, try cache
+            if not notices:
+                notices = self.load_from_cache()
+            
+            # Update UI in main thread
+            def update_ui():
+                # Check if module is still active before updating
+                if not hasattr(self, 'parent_frame') or not hasattr(self, 'scrollable_frame'):
+                    return
+                try:
+                    if not self.parent_frame.winfo_exists() or not self.scrollable_frame.winfo_exists():
+                        return
+                except tk.TclError:
+                    return
+                
+                if notices:
+                    self.display_notices(notices)
+                    # Show notification if updated from database
+                    if self.db and len(notices) != len(cache_notices if cache_notices else []):
+                        print(f"Updated notices: {len(cache_notices if cache_notices else [])} -> {len(notices)}")
+            
+            try:
+                if hasattr(self, 'parent_frame') and self.parent_frame.winfo_exists():
+                    self.parent_frame.after(0, update_ui)
+            except tk.TclError:
+                # Widget destroyed, can't update
+                pass
+        
+        # Start loading in background thread
+        thread = threading.Thread(target=load_in_thread, daemon=True)
+        thread.start()
+    
+    def display_notices(self, notices):
+        """Display notices in the UI"""
+        # Check if widget still exists before accessing it
+        if not hasattr(self, 'scrollable_frame'):
+            return
+        try:
+            # Check if widget is still valid
+            self.scrollable_frame.winfo_exists()
+        except tk.TclError:
+            # Widget has been destroyed, module is no longer active
+            return
+        
+        # Clear existing notices
+        try:
+            for widget in self.scrollable_frame.winfo_children():
+                widget.destroy()
+        except tk.TclError:
+            # Widget destroyed during iteration
+            return
+        
+        # Filter by category
+        category_filter = self.selected_category.get()
+        if category_filter != 'ALL':
+            notices = [n for n in notices if n.get('category') == category_filter]
+        
+        if not notices:
+            tk.Label(self.scrollable_frame, text="No notices available", 
                     font=("Arial", 12), bg=self.colors['background'], 
                     fg=self.colors['gray_medium']).pack(pady=20)
             return
         
-        try:
-            notices = self.db.get_all_notices()
-            
-            # Filter by category
-            category_filter = self.selected_category.get()
-            if category_filter != 'ALL':
-                notices = [n for n in notices if n.get('category') == category_filter]
-            
-            if not notices:
-                tk.Label(self.scrollable_frame, text="No notices available", 
-                        font=("Arial", 12), bg=self.colors['background'], 
-                        fg=self.colors['gray_medium']).pack(pady=20)
-                return
-            
-            # Create 3-column grid
-            row = 0
-            col = 0
-            max_cols = 3
-            
-            for notice in notices:
-                self.display_notice_card(notice, row, col)
-                col += 1
-                if col >= max_cols:
-                    col = 0
-                    row += 1
+        # Create 3-column grid
+        row = 0
+        col = 0
+        max_cols = 3
         
+        for notice in notices:
+            self.display_notice_card(notice, row, col)
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+    
+    def load_notices(self):
+        """Legacy method - now calls async version"""
+        self.load_notices_async()
+    
+    def save_to_cache(self, notices):
+        """Save notices to local cache"""
+        try:
+            with open(self.cache_file, 'w') as f:
+                json.dump(notices, f, indent=2)
+            print(f"Saved {len(notices)} notices to cache")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load notices: {e}")
-            tk.Label(self.scrollable_frame, text=f"Error loading notices: {e}", 
-                    font=("Arial", 12), bg=self.colors['background'], 
-                    fg='red').pack(pady=20)
+            print(f"Error saving to cache: {e}")
+    
+    def load_from_cache(self):
+        """Load notices from local cache"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r') as f:
+                    notices = json.load(f)
+                    print(f"Loaded {len(notices)} notices from cache")
+                    return notices
+        except Exception as e:
+            print(f"Error loading from cache: {e}")
+        return []
     
     def display_notice_card(self, notice, row, col):
         """Display a notice card in the grid"""
@@ -684,7 +810,8 @@ class NoticeBoardModule:
                         self.db.save_notice(self.user_id, title, message, category, title_color, card_color)
                         messagebox.showinfo("Success", "Notice added successfully!")
                     dialog.destroy()
-                    self.load_notices()
+                    # Reload notices (will update cache automatically)
+                    self.load_notices_async()
                 else:
                     messagebox.showerror("Error", "Database not available.")
             except Exception as e:
