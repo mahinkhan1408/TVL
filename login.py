@@ -34,7 +34,7 @@ class LoginPage:
         self.header_frame.pack(fill='x', pady=(0, 20))
         self.header_frame.pack_propagate(False)
 
-        tk.Label(self.header_frame, text="Techvengers Bid Writer",
+        tk.Label(self.header_frame, text="Preservation Universe",
                  font=("Arial", 18, "bold"), fg='white',
                  bg=self.colors['primary_blue']).pack(side="left", expand=True)
         

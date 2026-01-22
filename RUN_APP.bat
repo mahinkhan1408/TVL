@@ -1,5 +1,5 @@
 @echo off
-echo Starting Techvengers App...
+echo Starting Preservation Universe App...
 echo.
 python main.py
 pause

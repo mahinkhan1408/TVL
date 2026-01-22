@@ -1,34 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
+# PyInstaller spec file for building updater.exe
 
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],
+    ['updater.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('templates', 'templates'),  # Include Word templates
-    ],
+    datas=[],
     hiddenimports=[
-        'tkinter',
-        'tkinter.ttk',
-        'tkinter.filedialog',
-        'tkinter.messagebox',
-        'PIL',
-        'PIL.Image',
-        'PIL.ImageTk',
-        'PIL.ImageDraw',
-        'PIL.ImageFilter',
-        'supabase',
-        'bcrypt',
-        'docx',
-        'docx.shared',
-        'docx.enum.text',
-        'docx.oxml',
-        'docx.oxml.ns',
         'requests',
-        'lxml',
-        'pillow_heif',  # Optional, will fail gracefully if not installed
+        'psutil',
     ],
     hookspath=[],
     hooksconfig={},
@@ -49,18 +31,19 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='PreservationApp',
+    name='updater',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # Windowed application (no console)
+    console=True,  # Show console for updater (helps with debugging)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # You can add an icon file path here if you have one
+    icon=None,
 )
+

@@ -1,4 +1,4 @@
--- Supabase Database Schema for Techvengers App
+-- Supabase Database Schema for Preservation Universe App
 -- Run this in Supabase Dashboard -> SQL Editor
 
 -- ==================== Users Table ====================

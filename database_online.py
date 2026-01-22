@@ -1,5 +1,5 @@
 # database_online.py
-# Supabase Database Manager for Techvengers App
+# Supabase Database Manager for Preservation Universe App
 
 from supabase import create_client, Client
 import json

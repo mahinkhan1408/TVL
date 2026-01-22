@@ -4,7 +4,7 @@ import json
 from typing import Dict, Any
 
 class ThemeManager:
-    """Global theme manager for the entire Techvengers application."""
+    """Global theme manager for the entire Preservation Universe application."""
     
     def __init__(self):
         self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
