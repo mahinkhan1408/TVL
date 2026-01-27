@@ -23,7 +23,19 @@ except ImportError:
     Image = None
     ImageTk = None
 # Import Photo Viewer - handle the space in filename
-photo_viewer_path = os.path.join(os.path.dirname(__file__), "Photo Viewer.py")
+# Handle both development and PyInstaller bundled EXE
+if getattr(sys, 'frozen', False):
+    # Running as compiled EXE
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(sys.executable)
+else:
+    # Running as script
+    base_path = os.path.dirname(__file__)
+
+photo_viewer_path = os.path.join(base_path, "Photo Viewer.py")
 if os.path.exists(photo_viewer_path):
     spec = importlib.util.spec_from_file_location("photo_viewer", photo_viewer_path)
     photo_viewer_module = importlib.util.module_from_spec(spec)
@@ -43,6 +55,9 @@ class DashboardMenu:
     def __init__(self, root, username):
         self.root = root
         self.root.title("Preservation Universe - Dashboard")
+        
+        # Set window icon
+        self._set_icon(root)
         
         self.username = username
         self.current_module_instance = None
@@ -84,7 +99,7 @@ class DashboardMenu:
             ("Letterhead Bid", self.open_letterhead_bid),
             ("Notice Board", self.open_notice_board),
             ("Vendor Price", self.open_vendor_price),
-            ("GC/Roof CE", self.open_gc_roof_ce),
+            ("Cost Estimator", self.open_gc_roof_ce),
             ("Settings", self.show_settings),
         ]
         self.nav_btn_refs = {}
@@ -100,6 +115,26 @@ class DashboardMenu:
         
         self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
         os.makedirs(self.app_data_dir, exist_ok=True)
+    
+    def _set_icon(self, window):
+        """Set the application icon for a window."""
+        try:
+            # Get the correct path to icon file
+            if getattr(sys, 'frozen', False):
+                # Running as compiled EXE
+                if hasattr(sys, '_MEIPASS'):
+                    base_path = sys._MEIPASS
+                else:
+                    base_path = os.path.dirname(sys.executable)
+            else:
+                # Running as script
+                base_path = os.path.dirname(__file__)
+            
+            icon_path = os.path.join(base_path, 'icon1.ico')
+            if os.path.exists(icon_path):
+                window.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Warning: Could not set window icon: {e}")
     
     def _init_database_async(self, username):
         """Initialize database asynchronously to prevent blocking UI."""
@@ -256,7 +291,7 @@ class DashboardMenu:
         cards = [
             ("New Bid", "Create a new bid", "🆕", self.create_new_bid),
             ("Open Project", "Continue your saved work", "📂", self.show_bid_writer_dashboard),
-            ("GC/Roof CE", "GC/Roof change orders", "🏗️", self.open_gc_roof_ce),
+            ("Cost Estimator", "GC/Roof change orders", "🏗️", self.open_gc_roof_ce),
             ("Price Sheet", "Client and Vendor", "💲", self.show_price_sheet_page),
             ("Letterheads", "Letterhead bids", "📝", self.open_letterhead_bid),
             ("Notice Boards", "Announcements", "📢", self.open_notice_board),
@@ -369,10 +404,75 @@ class DashboardMenu:
         recent_canvas.configure(yscrollcommand=recent_scrollbar.set)
         recent_canvas.bind('<Configure>', update_canvas_width)
         
+        # Bind mouse wheel for scrolling - bind to both canvas and scrollable frame
+        def on_mousewheel(event):
+            try:
+                if recent_canvas.winfo_exists():
+                    # Fast scrolling - adjust scroll amount for smooth navigation
+                    scroll_amount = max(30, min(100, abs(event.delta) // 4))
+                    if event.delta > 0:
+                        recent_canvas.yview_scroll(-scroll_amount, "units")
+                    else:
+                        recent_canvas.yview_scroll(scroll_amount, "units")
+            except tk.TclError:
+                pass  # Widget was destroyed, ignore
+        
+        # Store the mouse wheel handler for later binding to new widgets
+        self.on_mousewheel = on_mousewheel
+        
+        # Bind mouse wheel to canvas and scrollable frame
+        recent_canvas.bind("<MouseWheel>", on_mousewheel)
+        recent_scrollable_frame.bind("<MouseWheel>", on_mousewheel)
+        
+        # Use bind_all for global mouse wheel support when over the canvas area
+        def bind_mousewheel_global(event):
+            # Only scroll if mouse is over the canvas or its children
+            widget = event.widget
+            try:
+                # Check if the widget is part of the recent projects area
+                current = widget
+                while current:
+                    if current == recent_canvas or current == recent_scrollable_frame or current == self.recent_bids_list:
+                        on_mousewheel(event)
+                        break
+                    # Also check if widget is a child of recent_bids_list
+                    if hasattr(self, 'recent_bids_list'):
+                        try:
+                            if widget.winfo_parent() == str(self.recent_bids_list) or str(current) == str(self.recent_bids_list):
+                                on_mousewheel(event)
+                                break
+                        except:
+                            pass
+                    current = current.master if hasattr(current, 'master') else None
+            except:
+                pass
+        
+        # Bind globally but filter by widget location
+        self.root.bind_all("<MouseWheel>", bind_mousewheel_global)
+        
+        # Helper function to bind mouse wheel to a widget and its children
+        def bind_mousewheel_to_widget(widget):
+            """Bind mouse wheel to a widget and recursively to its children."""
+            try:
+                widget.bind("<MouseWheel>", on_mousewheel)
+                for child in widget.winfo_children():
+                    bind_mousewheel_to_widget(child)
+            except:
+                pass
+        
+        # Store the binding function for use when creating rows
+        self.bind_mousewheel_to_widget = bind_mousewheel_to_widget
+        
+        # Bind to existing scrollable frame children
+        bind_mousewheel_to_widget(recent_scrollable_frame)
+        
         recent_scrollbar.pack(side="right", fill="y")
         recent_canvas.pack(side="left", fill="both", expand=True)
         
         self.recent_bids_list = recent_scrollable_frame
+        self.recent_canvas = recent_canvas  # Store canvas reference for pagination
+        self.current_page = 1  # Initialize current page
+        self.projects_per_page = 25  # Show 25 projects per page
         
         # Initialize cache for projects
         self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
@@ -397,26 +497,26 @@ class DashboardMenu:
         # Then load from database in background and update
         def load_in_thread():
             bids = []
+            # Initialize search_term variable to avoid UnboundLocalError
+            local_search_term = search_term if search_term is not None else (self.search_entry.get().strip() if hasattr(self, 'search_entry') else "")
             
             # Try to load from database
             if self.db and self.user_id:
                 try:
                     print("Loading projects from database...")
-                    # Get search term from entry if not provided
-                    if search_term is None:
-                        search_term = self.search_entry.get().strip() if hasattr(self, 'search_entry') else ""
+                    # Use local_search_term instead of search_term
                     filter_type = self.search_filter.get() if hasattr(self, 'search_filter') else "all"
                     
                     # Load from Supabase with search - show all projects from all users
-                    if search_term:
+                    if local_search_term:
                         if filter_type == "work_order":
-                            bids = self.db.search_bids_by_wo_number(self.user_id, search_term, all_bids=True)
+                            bids = self.db.search_bids_by_wo_number(self.user_id, local_search_term, all_bids=True)
                         elif filter_type == "property_address":
-                            bids = self.db.search_bids_by_property_address(self.user_id, search_term, all_bids=True)
+                            bids = self.db.search_bids_by_property_address(self.user_id, local_search_term, all_bids=True)
                         else:  # "all"
                             # Search both
-                            wo_bids = self.db.search_bids_by_wo_number(self.user_id, search_term, all_bids=True)
-                            addr_bids = self.db.search_bids_by_property_address(self.user_id, search_term, all_bids=True)
+                            wo_bids = self.db.search_bids_by_wo_number(self.user_id, local_search_term, all_bids=True)
+                            addr_bids = self.db.search_bids_by_property_address(self.user_id, local_search_term, all_bids=True)
                             # Combine and deduplicate by wo_number
                             bids_dict = {}
                             for bid in wo_bids + addr_bids:
@@ -431,24 +531,24 @@ class DashboardMenu:
                     print(f"Found {len(bids)} projects in database")
                     
                     # Save to cache after successful load (only if no search term)
-                    if not search_term:
+                    if not local_search_term:
                         self.save_projects_to_cache(bids)
                 except Exception as e:
                     error_msg = str(e)
                     print(f"Error loading projects from database: {error_msg}")
                     # Fall back to cache if database fails
-                    bids = self.load_projects_from_cache(search_term)
+                    bids = self.load_projects_from_cache(local_search_term)
                     if bids:
                         print(f"Using cached projects (offline mode): {len(bids)} projects")
             
             # If no database, try cache
             if not bids:
-                bids = self.load_projects_from_cache(search_term)
+                bids = self.load_projects_from_cache(local_search_term)
             
             # Update UI in main thread
             def update_ui():
                 if bids:
-                    self.display_bids(bids, search_term)
+                    self.display_bids(bids, local_search_term)
                     # Show notification if updated from database
                     if self.db and len(bids) != len(cache_bids if cache_bids else []):
                         print(f"Updated projects: {len(cache_bids if cache_bids else [])} -> {len(bids)}")
@@ -515,7 +615,7 @@ class DashboardMenu:
         # Call load_recent_bids with pre-loaded bids data to skip database query
         self.load_recent_bids(search_term=search_term, bids_data=bids)
     
-    def load_recent_bids(self, search_term=None, bids_data=None):
+    def load_recent_bids(self, search_term=None, bids_data=None, page=1):
         for widget in self.recent_bids_list.winfo_children():
             widget.destroy()
         
@@ -527,17 +627,21 @@ class DashboardMenu:
             self.bulk_export_button.config(state='disabled')
         if hasattr(self, 'select_all_var'):
             self.select_all_var.set(False)
+        
+        # Store current page and search term for pagination
+        self.current_page = page
+        self.current_search_term = search_term
 
         # Create table headers with consistent grid layout
         header_frame = tk.Frame(self.recent_bids_list, bg=self.colors['primary_blue'])
         header_frame.pack(fill='x')
         
-        headers = ['Select', 'Work Order', 'Property Address', 'Client Code', 'WO Type', 'Bid Count', 'Created By', 'Last Modified', 'Delete', 'Export']
+        headers = ['Select', 'Work Order', 'Property Address', 'Client Code', 'WO Type', 'Bid Count', 'Created By', 'Last Modified']
         
         # Column configuration: added Select column at the beginning
-        # Weights: Select (1), Work Order (2), Property Address (4), Client Code (2), WO Type (2), Bid Count (1), Created By (2), Last Modified (2), Delete (1), Export (1)
-        column_weights = [1, 2, 4, 2, 2, 1, 2, 2, 1, 1]
-        column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140, 70, 70]
+        # Weights: Select (1), Work Order (2), Property Address (4), Client Code (2), WO Type (2), Bid Count (1), Created By (2), Last Modified (2)
+        column_weights = [1, 2, 4, 2, 2, 1, 2, 2]
+        column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140]
         
         # Configure grid columns with weights and minimum sizes
         for i, (weight, minsize) in enumerate(zip(column_weights, column_minsizes)):
@@ -549,7 +653,14 @@ class DashboardMenu:
         select_all_cb.grid(row=0, column=0, sticky='nsew', padx=8, pady=8)
         
         for i, header in enumerate(headers[1:], start=1):  # Start from 1 to skip Select header
-            tk.Label(header_frame, text=header, font=("Arial", 11, "bold"), fg='white', bg=self.colors['primary_blue'], padx=8, pady=8, anchor='w', justify='left').grid(row=0, column=i, sticky='nsw')
+            # Center-align Bid Count header, left-align others
+            if header == 'Bid Count':
+                anchor = 'center'
+                justify = 'center'
+            else:
+                anchor = 'w'
+                justify = 'left'
+            tk.Label(header_frame, text=header, font=("Arial", 11, "bold"), fg='white', bg=self.colors['primary_blue'], padx=8, pady=8, anchor=anchor, justify=justify).grid(row=0, column=i, sticky='nsew')
 
         try:
             # Use provided bids_data if available (from cache), otherwise load from database
@@ -590,176 +701,59 @@ class DashboardMenu:
             else:
                 bids = []
             
-            if not bids:
-                tk.Label(self.recent_bids_list, text="No matching projects found." if search_term else "No projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
-                return
+            # Pagination: Show only 25 projects per page
+            total_projects = len(bids)
+            projects_per_page = 25
+            total_pages = (total_projects + projects_per_page - 1) // projects_per_page if total_projects > 0 else 1
             
-            for bid in bids:
-                    wo_number = bid['wo_number']
-                    
-                    # Load full bid data to get all fields including property_address, client_code, wo_type
-                    bid_data = self.db.load_bid(wo_number, self.user_id, all_users=True)
-                    
-                    # Get data from full bid_data first, then fallback to summary bid
-                    property_address = ''
-                    client_code = ''
-                    wo_type = ''
-                    
-                    if bid_data:
-                        property_address = bid_data.get('property_address') or ''
-                        client_code = bid_data.get('client_code') or ''
-                        wo_type = bid_data.get('wo_type') or ''
-                    
-                    # Fallback to summary bid if not found in full bid_data
-                    if not property_address:
-                        property_address = bid.get('property_address') or ''
-                    if not client_code:
-                        client_code = bid.get('client_code') or ''
-                    if not wo_type:
-                        wo_type = bid.get('wo_type') or ''
-                    
-                    # Parse updated_at timestamp - format to human-readable
-                    updated_at = bid.get('updated_at', '')
-                    modified_time = ''
-                    if updated_at:
-                        try:
-                            # Try parsing ISO format timestamp
-                            if 'T' in updated_at:
-                                # ISO format: 2024-01-01T12:00:00+00:00
-                                date_str = updated_at.split('T')[0]
-                                # Parse date and format as "Dec 24, 2025"
-                                dt = datetime.strptime(date_str, '%Y-%m-%d')
-                                modified_time = dt.strftime('%b %d, %Y')
-                            else:
-                                # Try other formats
-                                try:
-                                    dt = datetime.strptime(updated_at[:10], '%Y-%m-%d')
-                                    modified_time = dt.strftime('%b %d, %Y')
-                                except:
-                                    modified_time = updated_at[:10] if len(updated_at) >= 10 else updated_at
-                        except Exception as e:
-                            print(f"Error parsing date: {e}")
-                            modified_time = updated_at[:10] if len(updated_at) >= 10 else updated_at
-                    
-                    # Get bid count from loaded bid_data
-                    bid_count = 0
-                    if bid_data and 'selected_items' in bid_data:
-                        for category in bid_data['selected_items']:
-                            bid_count += len(bid_data['selected_items'][category])
-                    
-                    # Create row with proper grid layout - must match header configuration
-                    row_frame = tk.Frame(self.recent_bids_list, bg=self.colors['white'])
-                    
-                    # Use same column configuration as header for perfect alignment
-                    column_weights = [1, 2, 4, 2, 2, 1, 2, 2, 1, 1]
-                    column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140, 70, 70]
-                    
-                    for i, (weight, minsize) in enumerate(zip(column_weights, column_minsizes)):
-                        row_frame.grid_columnconfigure(i, weight=weight, minsize=minsize)
-                    
-                    # Get created_by username
-                    created_by = bid.get('created_by_username') or ''
-                    if not created_by or created_by == '':
-                        # Try to get username from user_id if created_by_username is missing
-                        bid_user_id = bid.get('user_id')
-                        if bid_user_id and self.db:
-                            try:
-                                user = self.db.get_user_by_id(bid_user_id)
-                                if user:
-                                    created_by = user.get('username', 'N/A')
-                                else:
-                                    created_by = 'N/A'
-                            except Exception as e:
-                                print(f"Error fetching username for user_id {bid_user_id}: {e}")
-                                created_by = 'N/A'
-                        else:
-                            created_by = 'N/A'
-                    
-                    # Ensure all values are strings and handle empty/None values
-                    property_address = str(property_address).strip() if property_address and property_address != 'N/A' else ''
-                    client_code = str(client_code).strip() if client_code and client_code != 'N/A' else ''
-                    wo_type = str(wo_type).strip() if wo_type and wo_type != 'N/A' else ''
-                    bid_count = str(bid_count) if bid_count else '0'
-                    created_by = str(created_by).strip() if created_by and created_by != 'N/A' else ''
-                    modified_time = str(modified_time).strip() if modified_time and modified_time != 'N/A' else ''
-                    
-                    # Make all labels clickable
-                    def make_label_click_handler(wo):
-                        return lambda e: self.open_existing_bid(wo)
-                    
-                    # Checkbox for selection
-                    checkbox_var = tk.BooleanVar()
-                    self.selected_bids[wo_number] = checkbox_var
-                    checkbox = tk.Checkbutton(row_frame, variable=checkbox_var, command=self.update_bulk_delete_button_state, bg=self.colors['white'], activebackground=self.colors['white'], highlightthickness=0, selectcolor=self.colors['white'])
-                    checkbox.grid(row=0, column=0, sticky='nsew', padx=8, pady=8)
-                    
-                    # Create all cells with consistent styling and proper padding
-                    wo_label = tk.Label(row_frame, text=wo_number, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['primary_blue'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    wo_label.grid(row=0, column=1, sticky='nsew')
-                    wo_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    addr_label = tk.Label(row_frame, text=property_address, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    addr_label.grid(row=0, column=2, sticky='nsew')
-                    addr_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    client_label = tk.Label(row_frame, text=client_code, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    client_label.grid(row=0, column=3, sticky='nsew')
-                    client_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    wo_type_label = tk.Label(row_frame, text=wo_type, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    wo_type_label.grid(row=0, column=4, sticky='nsew')
-                    wo_type_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    count_label = tk.Label(row_frame, text=bid_count, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    count_label.grid(row=0, column=5, sticky='nsew')
-                    count_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    created_by_label = tk.Label(row_frame, text=created_by, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['primary_blue'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    created_by_label.grid(row=0, column=6, sticky='nsew')
-                    created_by_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    time_label = tk.Label(row_frame, text=modified_time, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
-                    time_label.grid(row=0, column=7, sticky='nsew')
-                    time_label.bind("<Button-1>", make_label_click_handler(wo_number))
-                    
-                    # Delete button (smaller size)
-                    delete_button = tk.Button(row_frame, text="Delete", command=lambda wo=wo_number: self.delete_bid_state(wo), font=("Arial", 8), bg='#dc3545', fg='white', relief='flat', padx=4, pady=3)
-                    delete_button.grid(row=0, column=8, sticky='nsew')
-
-                    # Docs1 and Docs2 buttons container (replaces Export button)
-                    docs_frame = tk.Frame(row_frame, bg=self.colors['white'])
-                    docs_frame.grid(row=0, column=9, sticky='nsew')
-                    
-                    # Docs1 button (small)
-                    docs1_button = tk.Button(docs_frame, text="Docs1", command=lambda wo=wo_number: self.export_to_docs1(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
-                    docs1_button.pack(side='left', fill='both', expand=True, padx=1)
-                    
-                    # Docs2 button (small)
-                    docs2_button = tk.Button(docs_frame, text="Docs2", command=lambda wo=wo_number: self.export_to_docs2(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
-                    docs2_button.pack(side='left', fill='both', expand=True, padx=1)
-                    
-                    # Bind the entire row to open the bid
-                    def make_open_handler(wo):
-                        return lambda e: self.open_existing_bid(wo)
-                    row_frame.bind("<Button-1>", make_open_handler(wo_number))
-                    
-                    # Pack the row frame
-                    row_frame.pack(fill='x', pady=1)
-            else:
-                # Fallback to local JSON files if database not available
+            # Ensure page is within valid range
+            if page < 1:
+                page = 1
+            elif page > total_pages:
+                page = total_pages
+            
+            # Calculate slice indices
+            start_idx = (page - 1) * projects_per_page
+            end_idx = start_idx + projects_per_page
+            displayed_bids = bids[start_idx:end_idx]
+            
+            # Store total for pagination controls
+            self.total_projects = total_projects
+            self.total_pages = total_pages
+            self.current_page = page
+                
+            # Show "No projects found" message if no bids
+            if not displayed_bids and not bids:
+                    tk.Label(self.recent_bids_list, text="No matching projects found." if search_term else "No projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
+            
+            # If no displayed bids but we have bids, it means we're on a page with no results
+            if not displayed_bids and bids:
+                tk.Label(self.recent_bids_list, text=f"No projects on page {page}.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
+            
+            # Fallback to local JSON files if database not available and no displayed bids
+            if not displayed_bids and not bids:
                 files = [f for f in os.listdir(self.app_data_dir) if f.startswith("WO_") and f.endswith(".json")]
-
+                
                 # Filter files based on search term
                 if search_term:
-                    files = [f for f in files if search_term.lower() in f.lower()]
-
+                    search_lower = search_term.lower()
+                    files = [f for f in files if search_lower in f.lower()]
+                
+                # Sort files by modification time (newest first)
                 files.sort(key=lambda f: os.path.getmtime(os.path.join(self.app_data_dir, f)), reverse=True)
                 
-                if not files:
-                    tk.Label(self.recent_bids_list, text="No matching projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
-                    return
-
-                for i, file in enumerate(files):
+                # Apply pagination to local files too
+                total_files = len(files)
+                total_pages = (total_files + projects_per_page - 1) // projects_per_page if total_files > 0 else 1
+                start_idx = (page - 1) * projects_per_page
+                end_idx = start_idx + projects_per_page
+                displayed_files = files[start_idx:end_idx]
+                
+                self.total_projects = total_files
+                self.total_pages = total_pages
+                self.current_page = page
+                
+                for i, file in enumerate(displayed_files):
                     wo_number = file.replace("WO_", "").replace(".json", "")
                     file_path = os.path.join(self.app_data_dir, file)
                     modified_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d %H:%M')
@@ -771,7 +765,10 @@ class DashboardMenu:
                             state = json.load(f)
                             if 'selected_items' in state:
                                 for category in state['selected_items']:
-                                    bid_count += len(state['selected_items'][category])
+                                    # Only count items where selected = True
+                                    for item_key, item_info in state['selected_items'][category].items():
+                                        if isinstance(item_info, dict) and item_info.get("selected", False):
+                                            bid_count += 1
                     except Exception as e:
                         print(f"Error loading bid count for {file}: {e}")
                         bid_count = "N/A"
@@ -779,9 +776,13 @@ class DashboardMenu:
                     row_frame = tk.Frame(self.recent_bids_list, bg=self.colors['white'])
                     row_frame.pack(fill='x', pady=1)
                     
+                    # Bind mouse wheel to this row and all its children
+                    if hasattr(self, 'bind_mousewheel_to_widget'):
+                        self.bind_mousewheel_to_widget(row_frame)
+                    
                     # Use same column configuration as header for perfect alignment
-                    column_weights = [1, 2, 4, 2, 2, 1, 2, 2, 1, 1]
-                    column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140, 70, 70]
+                    column_weights = [1, 2, 4, 2, 2, 1, 2, 2]
+                    column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140]
                     
                     for i, (weight, minsize) in enumerate(zip(column_weights, column_minsizes)):
                         row_frame.grid_columnconfigure(i, weight=weight, minsize=minsize)
@@ -815,7 +816,311 @@ class DashboardMenu:
                     wo_type_label = tk.Label(row_frame, text="", font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', padx=8, pady=8)
                     wo_type_label.grid(row=0, column=4, sticky='nsew')
                     
-                    count_label = tk.Label(row_frame, text=str(bid_count), font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    count_label = tk.Label(row_frame, text=str(bid_count), font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='center', cursor="hand2", padx=8, pady=8)
+                    count_label.grid(row=0, column=5, sticky='nsew')
+                    count_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    created_by_label = tk.Label(row_frame, text="", font=("Arial", 10), bg=self.colors['white'], fg=self.colors['primary_blue'], anchor='w', padx=8, pady=8)
+                    created_by_label.grid(row=0, column=6, sticky='nsew')
+                    
+                    time_label = tk.Label(row_frame, text=modified_time, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    time_label.grid(row=0, column=7, sticky='nsew')
+                    time_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                
+                if not files:
+                    tk.Label(self.recent_bids_list, text="No matching projects found." if search_term else "No projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
+                    return
+            if displayed_bids:
+                # Database is available, process displayed bids from database (paginated)
+                for bid in displayed_bids:
+                    wo_number = bid['wo_number']
+                    
+                    # Use summary bid data directly - it already includes property_address, client_code, wo_type
+                    # No need to load full bid data for list view (this was causing slowness)
+                    property_address = bid.get('property_address') or ''
+                    client_code = bid.get('client_code') or ''
+                    wo_type = bid.get('wo_type') or ''
+                    
+                    # Parse updated_at timestamp - format to human-readable
+                    updated_at = bid.get('updated_at', '')
+                    modified_time = ''
+                    if updated_at:
+                        try:
+                            # Try parsing ISO format timestamp
+                            if 'T' in updated_at:
+                                # ISO format: 2024-01-01T12:00:00+00:00
+                                date_str = updated_at.split('T')[0]
+                                # Parse date and format as "Dec 24, 2025"
+                                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                modified_time = dt.strftime('%b %d, %Y')
+                            else:
+                                # Try other formats
+                                try:
+                                    dt = datetime.strptime(updated_at[:10], '%Y-%m-%d')
+                                    modified_time = dt.strftime('%b %d, %Y')
+                                except:
+                                    modified_time = updated_at[:10] if len(updated_at) >= 10 else updated_at
+                        except Exception as e:
+                            print(f"Error parsing date: {e}")
+                            modified_time = updated_at[:10] if len(updated_at) >= 10 else updated_at
+                    
+                    # Create row with proper grid layout - must match header configuration
+                    row_frame = tk.Frame(self.recent_bids_list, bg=self.colors['white'])
+                    row_frame.pack(fill='x', pady=1)
+                    
+                    # Use same column configuration as header for perfect alignment
+                    column_weights = [1, 2, 4, 2, 2, 1, 2, 2]
+                    column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140]
+                    
+                    for i, (weight, minsize) in enumerate(zip(column_weights, column_minsizes)):
+                        row_frame.grid_columnconfigure(i, weight=weight, minsize=minsize)
+                    
+                    # Get created_by username
+                    created_by = bid.get('created_by_username') or ''
+                    if not created_by or created_by == '':
+                        # Try to get username from user_id if created_by_username is missing
+                        bid_user_id = bid.get('user_id')
+                        if bid_user_id and self.db:
+                            try:
+                                user = self.db.get_user_by_id(bid_user_id)
+                                if user:
+                                    created_by = user.get('username', 'N/A')
+                                else:
+                                    created_by = 'N/A'
+                            except Exception as e:
+                                print(f"Error fetching username for user_id {bid_user_id}: {e}")
+                                created_by = 'N/A'
+                        else:
+                            created_by = 'N/A'
+                    
+                    # Ensure all values are strings and handle empty/None values
+                    property_address = str(property_address).strip() if property_address and property_address != 'N/A' else ''
+                    client_code = str(client_code).strip() if client_code and client_code != 'N/A' else ''
+                    wo_type = str(wo_type).strip() if wo_type and wo_type != 'N/A' else ''
+                    created_by = str(created_by).strip() if created_by and created_by != 'N/A' else ''
+                    modified_time = str(modified_time).strip() if modified_time and modified_time != 'N/A' else ''
+                    
+                    # Get bid count - will be loaded asynchronously to avoid blocking UI
+                    # Show 0 initially, will be updated when async load completes
+                    bid_count_str = '0'
+                    
+                    # Make all labels clickable
+                    def make_label_click_handler(wo):
+                        return lambda e: self.open_existing_bid(wo)
+                    
+                    # Checkbox for selection
+                    checkbox_var = tk.BooleanVar()
+                    self.selected_bids[wo_number] = checkbox_var
+                    checkbox = tk.Checkbutton(row_frame, variable=checkbox_var, command=self.update_bulk_delete_button_state, bg=self.colors['white'], activebackground=self.colors['white'], highlightthickness=0, selectcolor=self.colors['white'])
+                    checkbox.grid(row=0, column=0, sticky='nsew', padx=8, pady=8)
+                    
+                    # Create all cells with consistent styling and proper padding
+                    wo_label = tk.Label(row_frame, text=wo_number, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['primary_blue'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    wo_label.grid(row=0, column=1, sticky='nsew')
+                    wo_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    addr_label = tk.Label(row_frame, text=property_address, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    addr_label.grid(row=0, column=2, sticky='nsew')
+                    addr_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    client_label = tk.Label(row_frame, text=client_code, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    client_label.grid(row=0, column=3, sticky='nsew')
+                    client_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    wo_type_label = tk.Label(row_frame, text=wo_type, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    wo_type_label.grid(row=0, column=4, sticky='nsew')
+                    wo_type_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    count_label = tk.Label(row_frame, text=bid_count_str, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='center', cursor="hand2", padx=8, pady=8)
+                    count_label.grid(row=0, column=5, sticky='nsew')
+                    count_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    # Load bid count asynchronously (non-blocking) - only if we have a database
+                    if self.db:
+                        def load_bid_count_async(wo_num, label_widget):
+                            try:
+                                bid_data = self.db.load_bid(wo_num, self.user_id, all_users=True)
+                                if bid_data and 'selected_items' in bid_data:
+                                    count = 0
+                                    for category in bid_data['selected_items']:
+                                        for item_key, item_info in bid_data['selected_items'][category].items():
+                                            if isinstance(item_info, dict) and item_info.get("selected", False):
+                                                count += 1
+                                    # Update the count label in the UI thread
+                                    def update_count():
+                                        try:
+                                            if label_widget.winfo_exists():
+                                                label_widget.config(text=str(count))
+                                        except:
+                                            pass
+                                    self.root.after(0, update_count)
+                            except:
+                                pass
+                        
+                        # Start async bid count load (non-blocking)
+                        threading.Thread(target=load_bid_count_async, args=(wo_number, count_label), daemon=True).start()
+                    
+                    created_by_label = tk.Label(row_frame, text=created_by, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['primary_blue'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    created_by_label.grid(row=0, column=6, sticky='nsew')
+                    created_by_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    time_label = tk.Label(row_frame, text=modified_time, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    time_label.grid(row=0, column=7, sticky='nsew')
+                    time_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    # Bind the entire row to open the bid
+                    def make_open_handler(wo):
+                        return lambda e: self.open_existing_bid(wo)
+                    row_frame.bind("<Button-1>", make_open_handler(wo_number))
+                    
+                # Add pagination controls if there are multiple pages
+                if total_pages > 1:
+                    pagination_frame = tk.Frame(self.recent_bids_list, bg=self.colors['white'])
+                    pagination_frame.pack(fill='x', pady=10)
+                    
+                    # Pagination info
+                    info_label = tk.Label(pagination_frame, 
+                        text=f"Showing {start_idx + 1}-{min(end_idx, total_projects)} of {total_projects} projects",
+                        font=("Arial", 9), bg=self.colors['white'], fg=self.colors['gray_dark'])
+                    info_label.pack(side='left', padx=10)
+                    
+                    # Pagination buttons container
+                    buttons_frame = tk.Frame(pagination_frame, bg=self.colors['white'])
+                    buttons_frame.pack(side='right', padx=10)
+                    
+                    # Previous button
+                    if page > 1:
+                        prev_btn = tk.Button(buttons_frame, text="← Prev", 
+                            command=lambda: self.load_recent_bids(search_term=self.current_search_term, page=page-1),
+                            font=("Arial", 9), bg=self.colors['light_blue'], fg='white', 
+                            relief='flat', padx=8, pady=4, cursor='hand2')
+                        prev_btn.pack(side='left', padx=2)
+                    
+                    # Page number buttons (show up to 5 page numbers)
+                    start_page = max(1, page - 2)
+                    end_page = min(total_pages, page + 2)
+                    
+                    if start_page > 1:
+                        first_btn = tk.Button(buttons_frame, text="1",
+                            command=lambda: self.load_recent_bids(search_term=self.current_search_term, page=1),
+                            font=("Arial", 9), bg=self.colors['white'], fg=self.colors['primary_blue'],
+                            relief='flat', padx=6, pady=4, cursor='hand2')
+                        first_btn.pack(side='left', padx=2)
+                        if start_page > 2:
+                            ellipsis = tk.Label(buttons_frame, text="...", font=("Arial", 9), 
+                                bg=self.colors['white'], fg=self.colors['gray_dark'])
+                            ellipsis.pack(side='left', padx=2)
+                    
+                    for p in range(start_page, end_page + 1):
+                        if p == page:
+                            page_btn = tk.Button(buttons_frame, text=str(p),
+                                font=("Arial", 9, "bold"), bg=self.colors['primary_blue'], fg='white',
+                                relief='flat', padx=6, pady=4, cursor='hand2', state='disabled')
+                        else:
+                            page_btn = tk.Button(buttons_frame, text=str(p),
+                                command=lambda p=p: self.load_recent_bids(search_term=self.current_search_term, page=p),
+                                font=("Arial", 9), bg=self.colors['white'], fg=self.colors['primary_blue'],
+                                relief='flat', padx=6, pady=4, cursor='hand2')
+                        page_btn.pack(side='left', padx=2)
+                    
+                    if end_page < total_pages:
+                        if end_page < total_pages - 1:
+                            ellipsis = tk.Label(buttons_frame, text="...", font=("Arial", 9),
+                                bg=self.colors['white'], fg=self.colors['gray_dark'])
+                            ellipsis.pack(side='left', padx=2)
+                        last_btn = tk.Button(buttons_frame, text=str(total_pages),
+                            command=lambda: self.load_recent_bids(search_term=self.current_search_term, page=total_pages),
+                            font=("Arial", 9), bg=self.colors['white'], fg=self.colors['primary_blue'],
+                            relief='flat', padx=6, pady=4, cursor='hand2')
+                        last_btn.pack(side='left', padx=2)
+                    
+                    # Next button
+                    if page < total_pages:
+                        next_btn = tk.Button(buttons_frame, text="Next →",
+                            command=lambda: self.load_recent_bids(search_term=self.current_search_term, page=page+1),
+                            font=("Arial", 9), bg=self.colors['light_blue'], fg='white',
+                            relief='flat', padx=8, pady=4, cursor='hand2')
+                        next_btn.pack(side='left', padx=2)
+                    
+            # If no bids from database, fallback to local JSON files
+            if not displayed_bids and not bids:
+                # Fallback to local JSON files if database not available
+                files = [f for f in os.listdir(self.app_data_dir) if f.startswith("WO_") and f.endswith(".json")]
+
+                # Filter files based on search term
+                if search_term:
+                    files = [f for f in files if search_term.lower() in f.lower()]
+
+                files.sort(key=lambda f: os.path.getmtime(os.path.join(self.app_data_dir, f)), reverse=True)
+                
+                if not files:
+                    tk.Label(self.recent_bids_list, text="No matching projects found.", bg=self.colors['white'], fg=self.colors['gray_dark'], font=("Arial", 10, "italic")).pack(padx=10, pady=10)
+                    return
+
+                for i, file in enumerate(files):
+                    wo_number = file.replace("WO_", "").replace(".json", "")
+                    file_path = os.path.join(self.app_data_dir, file)
+                    modified_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d %H:%M')
+
+                    # Load the JSON to get bid count
+                    bid_count = 0
+                    try:
+                        with open(file_path, 'r') as f:
+                            state = json.load(f)
+                            if 'selected_items' in state:
+                                for category in state['selected_items']:
+                                    # Only count items where selected = True
+                                    for item_key, item_info in state['selected_items'][category].items():
+                                        if isinstance(item_info, dict) and item_info.get("selected", False):
+                                            bid_count += 1
+                    except Exception as e:
+                        print(f"Error loading bid count for {file}: {e}")
+                        bid_count = "N/A"
+
+                    row_frame = tk.Frame(self.recent_bids_list, bg=self.colors['white'])
+                    row_frame.pack(fill='x', pady=1)
+                    
+                    # Bind mouse wheel to this row and all its children
+                    if hasattr(self, 'bind_mousewheel_to_widget'):
+                        self.bind_mousewheel_to_widget(row_frame)
+                    
+                    # Use same column configuration as header for perfect alignment
+                    column_weights = [1, 2, 4, 2, 2, 1, 2, 2]
+                    column_minsizes = [50, 120, 180, 100, 120, 80, 120, 140]
+                    
+                    for i, (weight, minsize) in enumerate(zip(column_weights, column_minsizes)):
+                        row_frame.grid_columnconfigure(i, weight=weight, minsize=minsize)
+                    
+                    # Checkbox for selection
+                    checkbox_var = tk.BooleanVar()
+                    self.selected_bids[wo_number] = checkbox_var
+                    checkbox = tk.Checkbutton(row_frame, variable=checkbox_var, command=self.update_bulk_delete_button_state, bg=self.colors['white'], activebackground=self.colors['white'], highlightthickness=0, selectcolor=self.colors['white'])
+                    checkbox.grid(row=0, column=0, sticky='nsew', padx=8, pady=8)
+                    
+                    # Bind the entire row to open the bid - use default parameter to capture wo_number correctly
+                    def make_open_handler(wo):
+                        return lambda e: self.open_existing_bid(wo)
+                    row_frame.bind("<Button-1>", make_open_handler(wo_number))
+
+                    # Make all labels clickable
+                    def make_label_click_handler(wo):
+                        return lambda e: self.open_existing_bid(wo)
+                    
+                    wo_label = tk.Label(row_frame, text=wo_number, font=("Arial", 10), bg=self.colors['white'], fg=self.colors['primary_blue'], anchor='w', cursor="hand2", padx=8, pady=8)
+                    wo_label.grid(row=0, column=1, sticky='nsew')
+                    wo_label.bind("<Button-1>", make_label_click_handler(wo_number))
+                    
+                    # Empty cells for columns that don't exist in local file mode
+                    addr_label = tk.Label(row_frame, text="", font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', padx=8, pady=8)
+                    addr_label.grid(row=0, column=2, sticky='nsew')
+                    
+                    client_label = tk.Label(row_frame, text="", font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', padx=8, pady=8)
+                    client_label.grid(row=0, column=3, sticky='nsew')
+                    
+                    wo_type_label = tk.Label(row_frame, text="", font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='w', padx=8, pady=8)
+                    wo_type_label.grid(row=0, column=4, sticky='nsew')
+                    
+                    count_label = tk.Label(row_frame, text=str(bid_count), font=("Arial", 10), bg=self.colors['white'], fg=self.colors['gray_dark'], anchor='center', cursor="hand2", padx=8, pady=8)
                     count_label.grid(row=0, column=5, sticky='nsew')
                     count_label.bind("<Button-1>", make_label_click_handler(wo_number))
                     
@@ -826,21 +1131,6 @@ class DashboardMenu:
                     time_label.grid(row=0, column=7, sticky='nsew')
                     time_label.bind("<Button-1>", make_label_click_handler(wo_number))
                     
-                    # Delete button (smaller size)
-                    delete_button = tk.Button(row_frame, text="Delete", command=lambda wo=wo_number: self.delete_bid_state(wo), font=("Arial", 8), bg='#dc3545', fg='white', relief='flat', padx=4, pady=3)
-                    delete_button.grid(row=0, column=8, sticky='nsew')
-
-                    # Docs1 and Docs2 buttons container (replaces Export button)
-                    docs_frame = tk.Frame(row_frame, bg=self.colors['white'])
-                    docs_frame.grid(row=0, column=9, sticky='nsew')
-                    
-                    # Docs1 button (small)
-                    docs1_button = tk.Button(docs_frame, text="Docs1", command=lambda wo=wo_number: self.export_to_docs1(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
-                    docs1_button.pack(side='left', fill='both', expand=True, padx=1)
-                    
-                    # Docs2 button (small)
-                    docs2_button = tk.Button(docs_frame, text="Docs2", command=lambda wo=wo_number: self.export_to_docs2(wo), font=("Arial", 7), bg=self.colors['primary_blue'], fg='white', relief='flat', padx=3, pady=2)
-                    docs2_button.pack(side='left', fill='both', expand=True, padx=1)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load recent projects: {e}")
@@ -1909,7 +2199,7 @@ class DashboardMenu:
                 fg=self.colors['text_primary'], 
                 bg=self.colors['white']).pack(anchor='w')
         
-        tk.Label(info_content, text="Version 1.0", 
+        tk.Label(info_content, text="Version 1.1.1", 
                 font=("Arial", 10), 
                 fg=self.colors['text_secondary'], 
                 bg=self.colors['white']).pack(anchor='w', pady=(5, 10))
@@ -1944,11 +2234,11 @@ class DashboardMenu:
             else:
                 version_file = os.path.join(os.path.dirname(__file__), "version.txt")
             
-            current_version = "1.0.0"
+            current_version = "1.1.1"
             if os.path.exists(version_file):
                 try:
                     with open(version_file, 'r') as f:
-                        current_version = f.read().strip() or "1.0.0"
+                        current_version = f.read().strip() or "1.1.1"
                 except:
                     pass
             
@@ -1962,10 +2252,55 @@ class DashboardMenu:
             # Check for updates button
             def check_updates():
                 try:
-                    # Get update manager from main.py if available
+                    from update_manager import UpdateManager
                     import main
+                    
+                    # Try to get update manager from main.py
+                    update_mgr = None
                     if hasattr(main, 'update_manager') and main.update_manager:
-                        main.update_manager.check_for_updates(show_no_update_message=True)
+                        # Check if the update manager's root window is still valid
+                        try:
+                            if main.update_manager.root.winfo_exists():
+                                update_mgr = main.update_manager
+                                # Update root window reference to current dashboard root
+                                update_mgr.root = self.root
+                        except:
+                            pass
+                    
+                    # If update manager not available or invalid, create a new one
+                    if not update_mgr:
+                        try:
+                            # Get version from version.txt or use default
+                            if getattr(sys, 'frozen', False):
+                                version_file = os.path.join(os.path.dirname(sys.executable), "version.txt")
+                            else:
+                                version_file = os.path.join(os.path.dirname(__file__), "version.txt")
+                            
+                            current_version = "1.1.1"
+                            if os.path.exists(version_file):
+                                try:
+                                    with open(version_file, 'r') as f:
+                                        current_version = f.read().strip() or "1.1.1"
+                                except:
+                                    pass
+                            
+                            # Create new update manager instance
+                            update_mgr = UpdateManager(
+                                root_window=self.root,
+                                current_version=current_version,
+                                github_repo=getattr(main, 'GITHUB_REPO', 'mahinkhan1408/TVL'),
+                                check_on_startup=False
+                            )
+                            # Store it in main module for future use
+                            main.update_manager = update_mgr
+                        except Exception as e:
+                            messagebox.showerror("Update Check Error", 
+                                f"Could not initialize update system:\n{str(e)}")
+                            return
+                    
+                    # Check for updates
+                    if update_mgr:
+                        update_mgr.check_for_updates(show_no_update_message=True)
                     else:
                         messagebox.showinfo("Update Check", 
                             "Update system is not available.\n"

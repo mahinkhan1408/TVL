@@ -78,7 +78,11 @@ class GCRoofCEModule:
 
         # Bind mouse wheel
         def on_mousewheel(event):
-            self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                if hasattr(self, 'left_canvas') and self.left_canvas.winfo_exists():
+                    self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass  # Widget was destroyed, ignore
         self.left_canvas.bind_all("<MouseWheel>", on_mousewheel)
 
         # Grass Cut Section
@@ -104,6 +108,54 @@ class GCRoofCEModule:
                                           font=("Arial", 12, "bold"), bg="#dc3545",
                                           fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
         self.gc_clear_button.pack(side="left", padx=(0, 10))
+
+        # Stairs and Rail Section
+        stairs_rail_section_label = tk.Label(self.scrollable_content, text="Stairs and Rail", 
+                                             font=("Arial", 16, "bold"), bg=self.colors['background'], 
+                                             fg=self.colors['primary_blue'])
+        stairs_rail_section_label.pack(anchor="w", pady=(20, 10))
+        
+        self.stairs_rail_tab = tk.Frame(self.scrollable_content, bg=self.colors['white'], padx=15, pady=15, bd=1, relief="solid")
+        self.stairs_rail_tab.pack(fill="x", pady=(0, 15))
+        self.build_stairs_rail_frame(self.stairs_rail_tab)
+        
+        # Buttons for Stairs and Rail section
+        stairs_rail_buttons_frame = tk.Frame(self.scrollable_content, bg=self.colors['background'])
+        stairs_rail_buttons_frame.pack(fill="x", pady=(0, 20))
+        
+        self.stairs_rail_generate_button = tk.Button(stairs_rail_buttons_frame, text="Generate Bids", command=self.generate_bids,
+                                                      font=("Arial", 12, "bold"), bg=self.colors['green'], 
+                                                      fg="white", height=1, width=20, relief="solid", bd=1, cursor="hand2")
+        self.stairs_rail_generate_button.pack(side="left", padx=(0, 10))
+        
+        self.stairs_rail_clear_button = tk.Button(stairs_rail_buttons_frame, text="Clear Bids", command=self.clear_stairs_rail_bids,
+                                                  font=("Arial", 12, "bold"), bg="#dc3545",
+                                                  fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
+        self.stairs_rail_clear_button.pack(side="left", padx=(0, 10))
+        
+        # Fence Section
+        fence_section_label = tk.Label(self.scrollable_content, text="Fence", 
+                                       font=("Arial", 16, "bold"), bg=self.colors['background'], 
+                                       fg=self.colors['primary_blue'])
+        fence_section_label.pack(anchor="w", pady=(0, 10))
+        
+        self.fence_tab = tk.Frame(self.scrollable_content, bg=self.colors['white'], padx=15, pady=15, bd=1, relief="solid")
+        self.fence_tab.pack(fill="x", pady=(0, 15))
+        self.build_fence_frame(self.fence_tab)
+        
+        # Buttons for Fence section
+        fence_buttons_frame = tk.Frame(self.scrollable_content, bg=self.colors['background'])
+        fence_buttons_frame.pack(fill="x", pady=(0, 20))
+        
+        self.fence_generate_button = tk.Button(fence_buttons_frame, text="Generate Bids", command=self.generate_bids,
+                                               font=("Arial", 12, "bold"), bg=self.colors['green'], 
+                                               fg="white", height=1, width=20, relief="solid", bd=1, cursor="hand2")
+        self.fence_generate_button.pack(side="left", padx=(0, 10))
+        
+        self.fence_clear_button = tk.Button(fence_buttons_frame, text="Clear Bids", command=self.clear_fence_bids,
+                                            font=("Arial", 12, "bold"), bg="#dc3545",
+                                            fg="white", height=1, width=15, relief="solid", bd=1, cursor="hand2")
+        self.fence_clear_button.pack(side="left", padx=(0, 10))
 
         # Roofing Section
         roof_section_label = tk.Label(self.scrollable_content, text="Roofing", 
@@ -181,6 +233,191 @@ class GCRoofCEModule:
         self.maintainable_lot_entry.bind("<KeyRelease>", self.live_update_bid)
         self.total_lot_entry.bind("<KeyRelease>", self.live_update_bid)
         self.disclaimer_text.bind("<KeyRelease>", self.live_update_bid)
+
+    def build_stairs_rail_frame(self, parent_frame):
+        """Build UI for Stairs and Rail group (Staircase, Handrail, Guardrail)"""
+        # Create notebook for Stairs and Rail tabs
+        self.stairs_rail_notebook = ttk.Notebook(parent_frame)
+        self.stairs_rail_notebook.pack(fill='both', expand=True)
+        
+        # Tab 1: Staircase Installation
+        staircase_frame = tk.Frame(self.stairs_rail_notebook, bg=self.colors['white'], padx=15, pady=15)
+        self.stairs_rail_notebook.add(staircase_frame, text="Staircase")
+        self.build_staircase_frame(staircase_frame)
+        
+        # Tab 2: Handrail & Posts
+        handrail_frame = tk.Frame(self.stairs_rail_notebook, bg=self.colors['white'], padx=15, pady=15)
+        self.stairs_rail_notebook.add(handrail_frame, text="Handrail & Posts")
+        self.build_handrail_frame(handrail_frame)
+        
+        # Tab 3: Guardrail Installation
+        guardrail_frame = tk.Frame(self.stairs_rail_notebook, bg=self.colors['white'], padx=15, pady=15)
+        self.stairs_rail_notebook.add(guardrail_frame, text="Guardrail")
+        self.build_guardrail_frame(guardrail_frame)
+    
+    def build_staircase_frame(self, parent_frame):
+        """Build UI for Staircase Installation"""
+        parent_frame.grid_columnconfigure(0, weight=1)
+        parent_frame.grid_columnconfigure(1, weight=1)
+        
+        row = 0
+        tk.Label(parent_frame, text="Stair Count:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.stair_count_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.stair_count_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        self.stair_count_entry.insert(0, "0")
+        row += 1
+        
+        tk.Label(parent_frame, text="Step Width (LF):", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.step_width_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.step_width_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        self.step_width_entry.insert(0, "0")
+        row += 1
+        
+        tk.Label(parent_frame, text="Location:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.staircase_location_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.staircase_location_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        # Calculated fields (read-only)
+        tk.Label(parent_frame, text="Calculated Fields:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, columnspan=2, sticky="w", pady=(15, 5), padx=5)
+        row += 1
+        
+        self.staircase_calc_label = tk.Label(parent_frame, text="", font=("Arial", 10), 
+                                              bg=self.colors['white'], fg=self.colors['gray_dark'], justify='left')
+        self.staircase_calc_label.grid(row=row, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        tk.Label(parent_frame, text="Total Price:", font=("Arial", 12, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=15, padx=5)
+        self.staircase_price_label = tk.Label(parent_frame, text="$0.00", font=("Arial", 14, "bold"), 
+                                               bg=self.colors['result_bg'], fg=self.colors['primary_blue'],
+                                               relief="solid", bd=1, padx=10, pady=5)
+        self.staircase_price_label.grid(row=row, column=1, sticky="ew", pady=15, padx=5)
+        
+        self.stair_count_entry.bind("<KeyRelease>", self.live_update_bid)
+        self.step_width_entry.bind("<KeyRelease>", self.live_update_bid)
+        self.staircase_location_entry.bind("<KeyRelease>", self.live_update_bid)
+    
+    def build_handrail_frame(self, parent_frame):
+        """Build UI for Handrail & Posts"""
+        parent_frame.grid_columnconfigure(0, weight=1)
+        parent_frame.grid_columnconfigure(1, weight=1)
+        
+        row = 0
+        tk.Label(parent_frame, text="Handrail Length (LF):", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.handrail_lf_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.handrail_lf_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        self.handrail_lf_entry.insert(0, "0")
+        row += 1
+        
+        tk.Label(parent_frame, text="Location:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.handrail_location_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.handrail_location_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        # Calculated fields
+        tk.Label(parent_frame, text="Calculated Fields:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, columnspan=2, sticky="w", pady=(15, 5), padx=5)
+        row += 1
+        
+        self.handrail_calc_label = tk.Label(parent_frame, text="", font=("Arial", 10), 
+                                             bg=self.colors['white'], fg=self.colors['gray_dark'], justify='left')
+        self.handrail_calc_label.grid(row=row, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        tk.Label(parent_frame, text="Total Price:", font=("Arial", 12, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=15, padx=5)
+        self.handrail_price_label = tk.Label(parent_frame, text="$0.00", font=("Arial", 14, "bold"), 
+                                             bg=self.colors['result_bg'], fg=self.colors['primary_blue'],
+                                             relief="solid", bd=1, padx=10, pady=5)
+        self.handrail_price_label.grid(row=row, column=1, sticky="ew", pady=15, padx=5)
+        
+        self.handrail_lf_entry.bind("<KeyRelease>", self.live_update_bid)
+        self.handrail_location_entry.bind("<KeyRelease>", self.live_update_bid)
+    
+    def build_guardrail_frame(self, parent_frame):
+        """Build UI for Guardrail Installation"""
+        parent_frame.grid_columnconfigure(0, weight=1)
+        parent_frame.grid_columnconfigure(1, weight=1)
+        
+        row = 0
+        tk.Label(parent_frame, text="Guardrail Length (LF):", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.guardrail_lf_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.guardrail_lf_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        self.guardrail_lf_entry.insert(0, "0")
+        row += 1
+        
+        tk.Label(parent_frame, text="Location:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.guardrail_location_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.guardrail_location_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        # Calculated fields
+        tk.Label(parent_frame, text="Calculated Fields:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, columnspan=2, sticky="w", pady=(15, 5), padx=5)
+        row += 1
+        
+        self.guardrail_calc_label = tk.Label(parent_frame, text="", font=("Arial", 10), 
+                                              bg=self.colors['white'], fg=self.colors['gray_dark'], justify='left')
+        self.guardrail_calc_label.grid(row=row, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        tk.Label(parent_frame, text="Total Price:", font=("Arial", 12, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=15, padx=5)
+        self.guardrail_price_label = tk.Label(parent_frame, text="$0.00", font=("Arial", 14, "bold"), 
+                                               bg=self.colors['result_bg'], fg=self.colors['primary_blue'],
+                                               relief="solid", bd=1, padx=10, pady=5)
+        self.guardrail_price_label.grid(row=row, column=1, sticky="ew", pady=15, padx=5)
+        
+        self.guardrail_lf_entry.bind("<KeyRelease>", self.live_update_bid)
+        self.guardrail_location_entry.bind("<KeyRelease>", self.live_update_bid)
+    
+    def build_fence_frame(self, parent_frame):
+        """Build UI for Wood Fence Replacement"""
+        parent_frame.grid_columnconfigure(0, weight=1)
+        parent_frame.grid_columnconfigure(1, weight=1)
+        
+        row = 0
+        tk.Label(parent_frame, text="Fence Length (LF):", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.fence_lf_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.fence_lf_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        self.fence_lf_entry.insert(0, "0")
+        row += 1
+        
+        tk.Label(parent_frame, text="Location:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=5, padx=5)
+        self.fence_location_entry = tk.Entry(parent_frame, font=("Arial", 11), relief="solid", bd=1, width=15)
+        self.fence_location_entry.grid(row=row, column=1, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        # Calculated fields
+        tk.Label(parent_frame, text="Calculated Fields:", font=("Arial", 11, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, columnspan=2, sticky="w", pady=(15, 5), padx=5)
+        row += 1
+        
+        self.fence_calc_label = tk.Label(parent_frame, text="", font=("Arial", 10), 
+                                         bg=self.colors['white'], fg=self.colors['gray_dark'], justify='left')
+        self.fence_calc_label.grid(row=row, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+        row += 1
+        
+        tk.Label(parent_frame, text="Total Price:", font=("Arial", 12, "bold"), 
+                 bg=self.colors['white'], fg=self.colors['primary_blue']).grid(row=row, column=0, sticky="w", pady=15, padx=5)
+        self.fence_price_label = tk.Label(parent_frame, text="$0.00", font=("Arial", 14, "bold"), 
+                                          bg=self.colors['result_bg'], fg=self.colors['primary_blue'],
+                                          relief="solid", bd=1, padx=10, pady=5)
+        self.fence_price_label.grid(row=row, column=1, sticky="ew", pady=15, padx=5)
+        
+        self.fence_lf_entry.bind("<KeyRelease>", self.live_update_bid)
+        self.fence_location_entry.bind("<KeyRelease>", self.live_update_bid)
 
     def build_roof_frame(self, parent_frame):
         parent_frame.grid_columnconfigure(0, weight=1)
@@ -324,6 +561,133 @@ class GCRoofCEModule:
             return 0.0, f"[Pricing missing for {service}, {storey} storey, {client}]"
         except (ValueError, TypeError):
             return 0.0, "[Invalid numerical input]"
+    
+    def calculate_staircase_price(self, stair_count, step_width_lf):
+        """Calculate price for Staircase Installation - LOGIC 1"""
+        try:
+            RATE_PER_LF = 18
+            stair_count = float(stair_count)
+            step_width_lf = float(step_width_lf)
+            
+            if stair_count <= 0 or step_width_lf <= 0:
+                return 0.0, {}, ""
+            
+            STRINGER_COUNT = math.ceil(step_width_lf / 2) + 1
+            STRINGER_LENGTH_LF = stair_count
+            TOTAL_STRINGER_LF = STRINGER_COUNT * STRINGER_LENGTH_LF
+            TOTAL_STEP_LF = stair_count * step_width_lf
+            
+            STRINGER_COST = TOTAL_STRINGER_LF * RATE_PER_LF
+            STEP_COST = TOTAL_STEP_LF * RATE_PER_LF
+            TOTAL_PRICE = STRINGER_COST + STEP_COST
+            
+            calc_data = {
+                'STRINGER_COUNT': STRINGER_COUNT,
+                'STRINGER_LENGTH_LF': STRINGER_LENGTH_LF,
+                'TOTAL_STRINGER_LF': TOTAL_STRINGER_LF,
+                'TOTAL_STEP_LF': TOTAL_STEP_LF
+            }
+            
+            calc_text = f"Stringer Count: {STRINGER_COUNT}\nStringer Length: {int(STRINGER_LENGTH_LF)} LF\nTotal Stringer LF: {int(TOTAL_STRINGER_LF)} LF\nTotal Step LF: {int(TOTAL_STEP_LF)} LF"
+            
+            return TOTAL_PRICE, calc_data, calc_text
+        except (ValueError, TypeError):
+            return 0.0, {}, "[Invalid input]"
+    
+    def calculate_handrail_price(self, handrail_lf):
+        """Calculate price for Handrail & Posts - LOGIC 2"""
+        try:
+            RATE_PER_LF = 18
+            handrail_lf = float(handrail_lf)
+            
+            if handrail_lf <= 0:
+                return 0.0, {}, ""
+            
+            if handrail_lf <= 5:
+                POST_COUNT = 2
+            elif handrail_lf <= 10:
+                POST_COUNT = 3
+            elif handrail_lf <= 20:
+                POST_COUNT = 5
+            else:
+                POST_COUNT = math.ceil(handrail_lf / 4)  # For > 20, use ceil(handrail_lf/4)
+            
+            POST_LENGTH_LF = 5
+            TOTAL_POST_LF = POST_COUNT * POST_LENGTH_LF
+            TOTAL_PROJECT_LF = handrail_lf + TOTAL_POST_LF
+            TOTAL_PRICE = TOTAL_PROJECT_LF * RATE_PER_LF
+            
+            calc_data = {
+                'POST_COUNT': POST_COUNT,
+                'POST_LENGTH_LF': POST_LENGTH_LF,
+                'TOTAL_POST_LF': TOTAL_POST_LF,
+                'TOTAL_PROJECT_LF': TOTAL_PROJECT_LF
+            }
+            
+            calc_text = f"Post Count: {POST_COUNT}\nPost Length: {int(POST_LENGTH_LF)} LF\nTotal Post LF: {int(TOTAL_POST_LF)} LF\nTotal Project LF: {int(TOTAL_PROJECT_LF)} LF"
+            
+            return TOTAL_PRICE, calc_data, calc_text
+        except (ValueError, TypeError):
+            return 0.0, {}, "[Invalid input]"
+    
+    def calculate_guardrail_price(self, guardrail_lf):
+        """Calculate price for Guardrail Installation - LOGIC 3"""
+        try:
+            RATE_PER_LF = 18
+            guardrail_lf = float(guardrail_lf)
+            
+            if guardrail_lf <= 0:
+                return 0.0, {}, ""
+            
+            TOP_RAIL_LF = guardrail_lf
+            MIDDLE_RAIL_LF = guardrail_lf
+            TOTAL_RAIL_LF = guardrail_lf * 2
+            POST_COUNT = math.ceil(guardrail_lf / 5)
+            POST_LENGTH_LF = 5
+            TOTAL_POST_LF = POST_COUNT * POST_LENGTH_LF
+            TOTAL_MATERIAL_LF = TOTAL_RAIL_LF + TOTAL_POST_LF
+            TOTAL_PRICE = TOTAL_MATERIAL_LF * RATE_PER_LF
+            
+            calc_data = {
+                'TOP_RAIL_LF': TOP_RAIL_LF,
+                'MIDDLE_RAIL_LF': MIDDLE_RAIL_LF,
+                'TOTAL_RAIL_LF': TOTAL_RAIL_LF,
+                'POST_COUNT': POST_COUNT,
+                'POST_LENGTH_LF': POST_LENGTH_LF,
+                'TOTAL_POST_LF': TOTAL_POST_LF,
+                'TOTAL_MATERIAL_LF': TOTAL_MATERIAL_LF
+            }
+            
+            calc_text = f"Top Rail: {int(TOP_RAIL_LF)} LF\nMiddle Rail: {int(MIDDLE_RAIL_LF)} LF\nTotal Rail: {int(TOTAL_RAIL_LF)} LF\nPost Count: {POST_COUNT}\nPost Length: {int(POST_LENGTH_LF)} LF\nTotal Post LF: {int(TOTAL_POST_LF)} LF\nTotal Material LF: {int(TOTAL_MATERIAL_LF)} LF"
+            
+            return TOTAL_PRICE, calc_data, calc_text
+        except (ValueError, TypeError):
+            return 0.0, {}, "[Invalid input]"
+    
+    def calculate_fence_price(self, fence_lf):
+        """Calculate price for Wood Fence Replacement - LOGIC 4"""
+        try:
+            POST_UNIT_PRICE = 133.62
+            FENCE_PRICE_PER_LF = 18
+            fence_lf = float(fence_lf)
+            
+            if fence_lf <= 0:
+                return 0.0, {}, ""
+            
+            POST_COUNT = math.ceil(fence_lf / 8) + 1
+            POST_COST = POST_COUNT * POST_UNIT_PRICE
+            FENCE_PANEL_COST = fence_lf * FENCE_PRICE_PER_LF
+            TOTAL_PRICE = POST_COST + FENCE_PANEL_COST
+            
+            calc_data = {
+                'POST_COUNT': POST_COUNT
+            }
+            
+            calc_text = f"Post Count: {POST_COUNT}"
+            
+            return TOTAL_PRICE, calc_data, calc_text
+        except (ValueError, TypeError):
+            return 0.0, {}, "[Invalid input]"
 
     def live_update_bid(self, event=None):
         try:
@@ -361,8 +725,135 @@ class GCRoofCEModule:
                         elif grass_height_input > 48: pricing_tier = "Above 48\""
                         bid_template = self.gc_pricing_data.get(pricing_tier, {}).get('template', "")
                         if bid_template:
-                            gc_bid = bid_template.format(grass_condition=grass_condition_text, grass_height=grass_height_str, maintainable_lot=maintainable_lot_str, total_lot=total_lot_str, disclaimer=disclaimer_text_content)
+                            # Convert SF values to integers (no decimals)
+                            maintainable_lot_int = int(float(maintainable_lot_str)) if maintainable_lot_str.replace('.', '', 1).isdigit() else maintainable_lot_str
+                            total_lot_int = int(float(total_lot_str)) if total_lot_str.replace('.', '', 1).isdigit() else total_lot_str
+                            gc_bid = bid_template.format(grass_condition=grass_condition_text, grass_height=grass_height_str, maintainable_lot=maintainable_lot_int, total_lot=total_lot_int, disclaimer=disclaimer_text_content)
                             bid_parts.append(("GRASS CUT", gc_bid))
+            except Exception as e:
+                pass
+
+            # Update Serial Bid Templates section
+            try:
+                # Staircase Installation
+                if hasattr(self, 'stair_count_entry') and self.stair_count_entry.winfo_exists():
+                    stair_count = float(self.stair_count_entry.get() or 0)
+                    step_width_lf = float(self.step_width_entry.get() or 0)
+                    location = self.staircase_location_entry.get().strip()
+                    
+                    if stair_count > 0 and step_width_lf > 0:
+                        price, calc_data, calc_text = self.calculate_staircase_price(stair_count, step_width_lf)
+                        if hasattr(self, 'staircase_price_label'):
+                            self.staircase_price_label.config(text=f"${price:.2f}")
+                        if hasattr(self, 'staircase_calc_label'):
+                            self.staircase_calc_label.config(text=calc_text)
+                        
+                        if location:
+                            template = ("Install a {STAIR_COUNT}-step staircase at the {LOCATION} of the property. "
+                                       "Scope of work includes installation of {STRINGER_COUNT} stringers ({STRINGER_LENGTH_LF} LF each, "
+                                       "Total – {TOTAL_STRINGER_LF} LF) and {STAIR_COUNT} steps ({STEP_WIDTH_LF} LF each, "
+                                       "Total – {TOTAL_STEP_LF} LF). Price includes material, labor, time, and removal of generated debris.\n"
+                                       "Price: ${price:.2f}")
+                            
+                            bid_text = template.format(
+                                STAIR_COUNT=int(stair_count),
+                                LOCATION=location,
+                                STRINGER_COUNT=int(calc_data['STRINGER_COUNT']),
+                                STRINGER_LENGTH_LF=int(calc_data['STRINGER_LENGTH_LF']),
+                                TOTAL_STRINGER_LF=int(calc_data['TOTAL_STRINGER_LF']),
+                                STEP_WIDTH_LF=int(step_width_lf),
+                                TOTAL_STEP_LF=int(calc_data['TOTAL_STEP_LF']),
+                                price=price
+                            )
+                            bid_parts.append(("STAIRCASE INSTALLATION", bid_text))
+                
+                # Handrail & Posts
+                if hasattr(self, 'handrail_lf_entry') and self.handrail_lf_entry.winfo_exists():
+                    handrail_lf = float(self.handrail_lf_entry.get() or 0)
+                    location = self.handrail_location_entry.get().strip()
+                    
+                    if handrail_lf > 0:
+                        price, calc_data, calc_text = self.calculate_handrail_price(handrail_lf)
+                        if hasattr(self, 'handrail_price_label'):
+                            self.handrail_price_label.config(text=f"${price:.2f}")
+                        if hasattr(self, 'handrail_calc_label'):
+                            self.handrail_calc_label.config(text=calc_text)
+                        
+                        if location:
+                            template = ("Install {TOTAL_POST_LF} LF ({POST_LENGTH_LF} LF each – {POST_COUNT} posts) of posts and "
+                                       "{HANDRAIL_LF} LF of handrail (Total – {TOTAL_PROJECT_LF} LF) at the {LOCATION} of the property. "
+                                       "Price includes time, labor, and equipment.\nPrice: ${price:.2f}")
+                            
+                            bid_text = template.format(
+                                TOTAL_POST_LF=int(calc_data['TOTAL_POST_LF']),
+                                POST_LENGTH_LF=int(calc_data['POST_LENGTH_LF']),
+                                POST_COUNT=int(calc_data['POST_COUNT']),
+                                HANDRAIL_LF=int(handrail_lf),
+                                TOTAL_PROJECT_LF=int(calc_data['TOTAL_PROJECT_LF']),
+                                LOCATION=location,
+                                price=price
+                            )
+                            bid_parts.append(("HANDRAIL & POSTS", bid_text))
+                
+                # Guardrail Installation
+                if hasattr(self, 'guardrail_lf_entry') and self.guardrail_lf_entry.winfo_exists():
+                    guardrail_lf = float(self.guardrail_lf_entry.get() or 0)
+                    location = self.guardrail_location_entry.get().strip()
+                    
+                    if guardrail_lf > 0:
+                        price, calc_data, calc_text = self.calculate_guardrail_price(guardrail_lf)
+                        if hasattr(self, 'guardrail_price_label'):
+                            self.guardrail_price_label.config(text=f"${price:.2f}")
+                        if hasattr(self, 'guardrail_calc_label'):
+                            self.guardrail_calc_label.config(text=calc_text)
+                        
+                        if location:
+                            template = ("Install guardrail in a {GUARDRAIL_LF} LF area. Scope of work includes installation of "
+                                       "{TOP_RAIL_LF} LF of top rail and {MIDDLE_RAIL_LF} LF of middle rail (Total – {TOTAL_RAIL_LF} LF, "
+                                       "2x4 wood will be used), along with {POST_COUNT} posts ({POST_LENGTH_LF} LF each – Total {TOTAL_POST_LF} LF, "
+                                       "2x4 wood will be used) to secure the guardrail and prevent trip hazards at the {LOCATION} of the property. "
+                                       "Total of {TOTAL_MATERIAL_LF} LF of 2x4 wood will be used. Price includes time, labor, equipment, and material.\n"
+                                       "Price: ${price:.2f}")
+                            
+                            bid_text = template.format(
+                                GUARDRAIL_LF=int(guardrail_lf),
+                                TOP_RAIL_LF=int(calc_data['TOP_RAIL_LF']),
+                                MIDDLE_RAIL_LF=int(calc_data['MIDDLE_RAIL_LF']),
+                                TOTAL_RAIL_LF=int(calc_data['TOTAL_RAIL_LF']),
+                                POST_COUNT=int(calc_data['POST_COUNT']),
+                                POST_LENGTH_LF=int(calc_data['POST_LENGTH_LF']),
+                                TOTAL_POST_LF=int(calc_data['TOTAL_POST_LF']),
+                                LOCATION=location,
+                                TOTAL_MATERIAL_LF=int(calc_data['TOTAL_MATERIAL_LF']),
+                                price=price
+                            )
+                            bid_parts.append(("GUARDRAIL INSTALLATION", bid_text))
+                
+                # Wood Fence Replacement
+                if hasattr(self, 'fence_lf_entry') and self.fence_lf_entry.winfo_exists():
+                    fence_lf = float(self.fence_lf_entry.get() or 0)
+                    location = self.fence_location_entry.get().strip()
+                    
+                    if fence_lf > 0:
+                        price, calc_data, calc_text = self.calculate_fence_price(fence_lf)
+                        if hasattr(self, 'fence_price_label'):
+                            self.fence_price_label.config(text=f"${price:.2f}")
+                        if hasattr(self, 'fence_calc_label'):
+                            self.fence_calc_label.config(text=calc_text)
+                        
+                        if location:
+                            template = ("Install {FENCE_LF} LF of damaged wood fence at the {LOCATION} of the property. "
+                                       "Scope of work includes installation of {POST_COUNT} wooden fence posts, set in concrete. "
+                                       "Permit will be pulled and invoiced as needed. Price includes equipment, labor, and removal of generated debris.\n"
+                                       "Price: ${price:.2f}")
+                            
+                            bid_text = template.format(
+                                FENCE_LF=int(fence_lf),
+                                LOCATION=location,
+                                POST_COUNT=int(calc_data['POST_COUNT']),
+                                price=price
+                            )
+                            bid_parts.append(("WOOD FENCE REPLACEMENT", bid_text))
             except Exception as e:
                 pass
 
@@ -404,15 +895,15 @@ class GCRoofCEModule:
                         )
 
                         roof_bid = replace_bid_template.format(
-                            roof_area=f"{roof_area:.2f}",
-                            edge_metal=f"{edge_metal:.2f}",
-                            ice_shield=f"{0.2 * roof_area:.2f}",
-                            flashing=f"{0.15 * roof_area:.2f}",
-                            ridge_cap=f"{ridge_cap:.2f}",
-                            roof_jack=f"{roof_jack:.2f}",
+                            roof_area=int(roof_area),
+                            edge_metal=int(edge_metal),
+                            ice_shield=int(0.2 * roof_area),
+                            flashing=int(0.15 * roof_area),
+                            ridge_cap=int(ridge_cap),
+                            roof_jack=int(roof_jack),
                             price=replace_price
                         ) + "\n\n" + tarp_bid_template.format(
-                            roof_area=f"{roof_area:.2f}",
+                            roof_area=int(roof_area),
                             price=tarp_price
                         )
                         bid_parts.append(("ROOFING", roof_bid))
@@ -450,3 +941,55 @@ class GCRoofCEModule:
         self.tarp_price_label.config(text="$0.00")
         self.replacement_price_label.config(text="$0.00")
         self.generated_bid_text.delete("1.0", tk.END); self.generated_bid_text.insert("1.0", "Enter details to generate bid...")
+    
+    def clear_stairs_rail_bids(self):
+        """Clear all Stairs and Rail bid template fields"""
+        try:
+            if hasattr(self, 'stair_count_entry') and self.stair_count_entry.winfo_exists():
+                self.stair_count_entry.delete(0, tk.END)
+                self.stair_count_entry.insert(0, "0")
+                self.step_width_entry.delete(0, tk.END)
+                self.step_width_entry.insert(0, "0")
+                self.staircase_location_entry.delete(0, tk.END)
+                if hasattr(self, 'staircase_price_label'):
+                    self.staircase_price_label.config(text="$0.00")
+                if hasattr(self, 'staircase_calc_label'):
+                    self.staircase_calc_label.config(text="")
+            
+            if hasattr(self, 'handrail_lf_entry') and self.handrail_lf_entry.winfo_exists():
+                self.handrail_lf_entry.delete(0, tk.END)
+                self.handrail_lf_entry.insert(0, "0")
+                self.handrail_location_entry.delete(0, tk.END)
+                if hasattr(self, 'handrail_price_label'):
+                    self.handrail_price_label.config(text="$0.00")
+                if hasattr(self, 'handrail_calc_label'):
+                    self.handrail_calc_label.config(text="")
+            
+            if hasattr(self, 'guardrail_lf_entry') and self.guardrail_lf_entry.winfo_exists():
+                self.guardrail_lf_entry.delete(0, tk.END)
+                self.guardrail_lf_entry.insert(0, "0")
+                self.guardrail_location_entry.delete(0, tk.END)
+                if hasattr(self, 'guardrail_price_label'):
+                    self.guardrail_price_label.config(text="$0.00")
+                if hasattr(self, 'guardrail_calc_label'):
+                    self.guardrail_calc_label.config(text="")
+            
+            self.live_update_bid()
+        except Exception as e:
+            pass
+    
+    def clear_fence_bids(self):
+        """Clear all Fence bid template fields"""
+        try:
+            if hasattr(self, 'fence_lf_entry') and self.fence_lf_entry.winfo_exists():
+                self.fence_lf_entry.delete(0, tk.END)
+                self.fence_lf_entry.insert(0, "0")
+                self.fence_location_entry.delete(0, tk.END)
+                if hasattr(self, 'fence_price_label'):
+                    self.fence_price_label.config(text="$0.00")
+                if hasattr(self, 'fence_calc_label'):
+                    self.fence_calc_label.config(text="")
+            
+            self.live_update_bid()
+        except Exception as e:
+            pass

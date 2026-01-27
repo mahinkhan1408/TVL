@@ -395,7 +395,28 @@ class UpdateManager:
             
             # Close the application
             self._log("Closing application for update...")
-            self.root.after(100, self.root.quit)
+            # Give updater a moment to start, then force exit
+            def exit_app():
+                try:
+                    # Try to destroy the root window first
+                    try:
+                        if self.root.winfo_exists():
+                            self.root.quit()  # Stop mainloop
+                            self.root.destroy()  # Destroy window
+                    except:
+                        pass
+                    
+                    # Force exit the entire Python process
+                    # This ensures all threads and processes are terminated
+                    import os
+                    os._exit(0)
+                except Exception as e:
+                    # Last resort: use sys.exit
+                    self._log(f"Error during exit: {e}")
+                    sys.exit(0)
+            
+            # Give updater 1 second to fully launch before exiting
+            self.root.after(1000, exit_app)
             
         except Exception as e:
             self._log(f"Error launching updater: {e}")

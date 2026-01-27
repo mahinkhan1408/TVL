@@ -31,7 +31,7 @@ class FastImageViewer:
             self.root = root
             self.is_standalone = False
         
-        self.root.title("Fast Python Image Viewer")
+        self.root.title("Image viewer")
         self.root.geometry("1000x800")
         self.root.configure(bg="#2c3e50") 
 

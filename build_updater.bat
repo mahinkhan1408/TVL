@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 REM Build updater.exe
-pyinstaller updater.spec
+python -m PyInstaller updater.spec
 
 if errorlevel 1 (
     echo.

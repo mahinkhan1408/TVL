@@ -4,6 +4,7 @@ from tkinter import messagebox
 import os
 import json
 import threading
+import sys
 from dashboard_menu import DashboardMenu # Import the new DashboardMenu
 from theme_manager import theme_manager
 
@@ -11,6 +12,9 @@ class LoginPage:
     def __init__(self, master):
         self.master = master
         self.master.title("Login")
+        
+        # Set window icon
+        self._set_icon(master)
         
         # Use global theme manager
         self.colors = theme_manager.get_current_colors()
@@ -196,6 +200,7 @@ class LoginPage:
                 
                 # Create a new root window for the dashboard menu
                 dashboard_root = tk.Tk()
+                self._set_icon(dashboard_root)
                 app = DashboardMenu(dashboard_root, username=username) 
                 dashboard_root.mainloop()
             else:
@@ -206,6 +211,26 @@ class LoginPage:
             messagebox.showerror("Login Error", 
                 f"An error occurred during login:\n{error_msg}\n\nPlease check your database connection.")
 
+    def _set_icon(self, window):
+        """Set the application icon for a window."""
+        try:
+            # Get the correct path to icon file
+            if getattr(sys, 'frozen', False):
+                # Running as compiled EXE
+                if hasattr(sys, '_MEIPASS'):
+                    base_path = sys._MEIPASS
+                else:
+                    base_path = os.path.dirname(sys.executable)
+            else:
+                # Running as script
+                base_path = os.path.dirname(__file__)
+            
+            icon_path = os.path.join(base_path, 'icon1.ico')
+            if os.path.exists(icon_path):
+                window.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Warning: Could not set window icon: {e}")
+    
     def on_theme_changed(self, theme_name, colors):
         """Called when theme is changed globally."""
         self.colors = colors

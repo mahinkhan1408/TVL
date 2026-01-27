@@ -5,6 +5,7 @@ from login import LoginPage
 from theme_manager import theme_manager
 import time
 import os
+import sys
 
 # Initialize update manager (check for updates on startup)
 update_manager = None
@@ -15,7 +16,7 @@ try:
     GITHUB_REPO = "mahinkhan1408/TVL"  # GitHub repository for automatic updates
     
     # Current app version (semantic versioning: MAJOR.MINOR.PATCH)
-    APP_VERSION = "1.0.0"  # TODO: Update this when releasing new versions
+    APP_VERSION = "1.1.1"  # Production version
 except ImportError:
     # Update system not available (development mode or missing dependencies)
     UpdateManager = None
@@ -26,6 +27,9 @@ class SplashScreen:
         self.root = root
         self.root.title("Preservation Universe")
         self.root.overrideredirect(True) # Remove window decorations
+        
+        # Set window icon
+        self._set_icon(root)
 
         # Use theme manager for colors
         self.colors = theme_manager.get_current_colors()
@@ -66,9 +70,30 @@ class SplashScreen:
                 print(f"Warning: Could not initialize update system: {e}")
                 # App continues normally even if update system fails
 
+    def _set_icon(self, window):
+        """Set the application icon for a window."""
+        try:
+            # Get the correct path to icon file
+            if getattr(sys, 'frozen', False):
+                # Running as compiled EXE
+                if hasattr(sys, '_MEIPASS'):
+                    base_path = sys._MEIPASS
+                else:
+                    base_path = os.path.dirname(sys.executable)
+            else:
+                # Running as script
+                base_path = os.path.dirname(__file__)
+            
+            icon_path = os.path.join(base_path, 'icon1.ico')
+            if os.path.exists(icon_path):
+                window.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Warning: Could not set window icon: {e}")
+    
     def open_login_page(self):
         self.root.destroy()
         login_root = tk.Tk()
+        self._set_icon(login_root)
         LoginPage(login_root)
 
         login_root.mainloop()

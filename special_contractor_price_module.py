@@ -265,7 +265,7 @@ class SpecialContractorPriceModule:
                     contractor_name = contractor['contractor_name']
                     # Load line items
                     line_items = self.db.get_contractor_line_items(contractor_id)
-                    
+                
                     self.contractors_data[contractor_name] = {
                         'id': contractor_id,
                         'line_items': line_items,
@@ -460,7 +460,7 @@ class SpecialContractorPriceModule:
                     divider = tk.Frame(table_frame, bg='#e0e0e0', height=1)
                     divider.pack(fill='x', padx=0, pady=0)
                 # Create row for each line item
-                self.create_line_item_row(table_frame, contractor_name, item)
+            self.create_line_item_row(table_frame, contractor_name, item)
         
         # Action buttons frame - moved outside table for better visibility
         buttons_frame = tk.Frame(self.scrollable_content, bg=self.colors['background'])

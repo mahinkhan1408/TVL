@@ -4,6 +4,7 @@ from tkinter import messagebox
 from theme_manager import theme_manager
 import json
 import os
+import threading
 
 class WOInspectionModule:
     """
@@ -72,113 +73,111 @@ class WOInspectionModule:
         os.makedirs(self.app_data_dir, exist_ok=True)
         self.checklist_storage_path = os.path.join(self.app_data_dir, "wo_inspection_checklists.json")
         
-        # Initialize Supabase database
-        import sys
-        sys.stdout.flush()
-        print(f"\n{'='*60}", flush=True)
-        print(f"[WOInspectionModule.__init__] Initializing database connection...", flush=True)
-        print(f"{'='*60}", flush=True)
+        # Initialize Supabase database asynchronously to prevent blocking UI
         self.db = None
         self.supabase_client = None
         
-        try:
-            print(f"[WOInspectionModule.__init__] Step 1: Importing database_online...", flush=True)
-            from database_online import OnlineDatabaseManager
-            print(f"[WOInspectionModule.__init__] ✅ Import successful", flush=True)
+        # Initialize database in background thread
+        def init_database_async():
+            import sys
+            # Safe flush - sys.stdout can be None in PyInstaller EXE with console=False
+            if sys.stdout is not None:
+                try:
+                    sys.stdout.flush()
+                except:
+                    pass
+            print(f"\n{'='*60}")
+            print(f"[WOInspectionModule.__init__] Initializing database connection...")
+            print(f"{'='*60}")
             
-            print(f"[WOInspectionModule.__init__] Step 2: Creating OnlineDatabaseManager instance...", flush=True)
-            self.db = OnlineDatabaseManager()
-            print(f"[WOInspectionModule.__init__] ✅ Database manager created: {type(self.db).__name__}", flush=True)
-            print(f"[WOInspectionModule.__init__] Database object: {self.db}", flush=True)
-            
-            # Store supabase client reference for direct queries if needed
-            if self.db:
-                print(f"[WOInspectionModule.__init__] Checking for supabase attribute...")
-                print(f"   - hasattr(self.db, 'supabase'): {hasattr(self.db, 'supabase')}")
+            try:
+                print(f"[WOInspectionModule.__init__] Step 1: Importing database_online...")
+                from database_online import OnlineDatabaseManager
+                print(f"[WOInspectionModule.__init__] ✅ Import successful")
                 
-                if hasattr(self.db, 'supabase'):
-                    self.supabase_client = self.db.supabase
-                    print(f"[WOInspectionModule.__init__] ✅ Supabase client available")
-                    print(f"   - Client type: {type(self.supabase_client)}")
-                    print(f"   - Client is None: {self.supabase_client is None}")
+                print(f"[WOInspectionModule.__init__] Step 2: Creating OnlineDatabaseManager instance...")
+                db = OnlineDatabaseManager()
+                print(f"[WOInspectionModule.__init__] ✅ Database manager created: {type(db).__name__}")
+                
+                # Store supabase client reference for direct queries if needed
+                if db:
+                    print(f"[WOInspectionModule.__init__] Checking for supabase attribute...")
+                    print(f"   - hasattr(db, 'supabase'): {hasattr(db, 'supabase')}")
                     
-                    # Test the connection
-                    if self.supabase_client:
-                        try:
-                            test_result = self.db.supabase.table('users').select('id').limit(1).execute()
-                            print(f"[WOInspectionModule.__init__] ✅ Database connection verified successfully")
-                            print(f"[WOInspectionModule.__init__] Test query returned: {len(test_result.data) if test_result.data else 0} rows")
-                        except Exception as test_e:
-                            print(f"[WOInspectionModule.__init__] ⚠️ Database connection test failed: {test_e}")
-                            print(f"   This might indicate RLS or permission issues")
-                            import traceback
-                            traceback.print_exc()
+                    if hasattr(db, 'supabase'):
+                        supabase_client = db.supabase
+                        print(f"[WOInspectionModule.__init__] ✅ Supabase client available")
+                        
+                        # Test the connection (non-blocking, just for logging)
+                        if supabase_client:
+                            try:
+                                test_result = db.supabase.table('users').select('id').limit(1).execute()
+                                print(f"[WOInspectionModule.__init__] ✅ Database connection verified successfully")
+                                print(f"[WOInspectionModule.__init__] Test query returned: {len(test_result.data) if test_result.data else 0} rows")
+                            except Exception as test_e:
+                                print(f"[WOInspectionModule.__init__] ⚠️ Database connection test failed: {test_e}")
+                                print(f"   This might indicate RLS or permission issues")
+                        
+                        # Update database references in main thread
+                        def update_db_refs():
+                            self.db = db
+                            self.supabase_client = supabase_client
+                            # Update database status label if it exists
+                            self.update_db_status_label()
+                        
+                        # Schedule update on main thread
+                        if hasattr(self.parent_frame, 'after'):
+                            self.parent_frame.after(0, update_db_refs)
+                        else:
+                            # Fallback: update directly if after() not available
+                            self.db = db
+                            self.supabase_client = supabase_client
+                            self.update_db_status_label()
                     else:
-                        print(f"[WOInspectionModule.__init__] ⚠️ Supabase client is None")
+                        print(f"[WOInspectionModule.__init__] ⚠️ Database object has no 'supabase' attribute")
                 else:
-                    print(f"[WOInspectionModule.__init__] ⚠️ Database object has no 'supabase' attribute")
-                    print(f"   Available attributes: {[attr for attr in dir(self.db) if not attr.startswith('_')][:10]}")
-            else:
-                print(f"[WOInspectionModule.__init__] ❌ Database manager is None after initialization")
-                
-        except ImportError as import_e:
-            error_msg = f"[WOInspectionModule.__init__] ❌ Import Error: Could not import database_online\n   Error: {import_e}\n   Make sure database_online.py exists and dependencies are installed"
-            print(error_msg, flush=True)
-            import traceback
-            traceback.print_exc()
-            self.db = None
-            self.supabase_client = None
-            # Show user-friendly error
-            try:
-                messagebox.showerror("Database Connection Failed", 
-                                   f"Could not import database module.\n\nError: {import_e}\n\nPlease check:\n1. database_online.py exists\n2. Dependencies are installed (pip install supabase)")
-            except:
-                pass
-        except ConnectionError as conn_e:
-            error_msg = f"[WOInspectionModule.__init__] ❌ Connection Error: {conn_e}"
-            print(error_msg, flush=True)
-            import traceback
-            traceback.print_exc()
-            self.db = None
-            self.supabase_client = None
-            # Show user-friendly error
-            try:
-                error_detail = str(conn_e)
-                if "Invalid API key" in error_detail:
-                    messagebox.showerror("Database Connection Failed", 
-                                       f"Invalid Supabase API key.\n\nPlease check your config.py file.\n\nError: {error_detail}")
-                elif "Connection" in error_detail or "timeout" in error_detail:
-                    messagebox.showerror("Database Connection Failed", 
-                                       f"Could not connect to Supabase.\n\nPlease check your internet connection.\n\nError: {error_detail}")
-                else:
-                    messagebox.showerror("Database Connection Failed", 
-                                       f"Failed to connect to database.\n\nError: {error_detail}")
-            except:
-                pass
-        except Exception as e:
-            error_msg = f"[WOInspectionModule.__init__] ❌ Unexpected ERROR: {type(e).__name__}: {e}"
-            print(error_msg, flush=True)
-            import traceback
-            traceback.print_exc()
-            self.db = None
-            self.supabase_client = None
-            # Show user-friendly error
-            try:
-                messagebox.showerror("Database Connection Failed", 
-                                   f"Unexpected error connecting to database.\n\nError: {type(e).__name__}: {e}\n\nCheck console for details.")
-            except:
-                pass
+                    print(f"[WOInspectionModule.__init__] ❌ Database manager is None after initialization")
+                    
+            except ImportError as import_e:
+                error_msg = f"[WOInspectionModule.__init__] ❌ Import Error: Could not import database_online\n   Error: {import_e}"
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
+            except ConnectionError as conn_e:
+                error_msg = f"[WOInspectionModule.__init__] ❌ Connection Error: {conn_e}"
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
+            except Exception as e:
+                error_msg = f"[WOInspectionModule.__init__] ❌ Unexpected Error: {e}"
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
         
-        print(f"[WOInspectionModule.__init__] Final state:", flush=True)
-        print(f"   - self.db: {self.db}", flush=True)
-        print(f"   - self.supabase_client: {self.supabase_client}", flush=True)
-        print(f"{'='*60}\n", flush=True)
+        # Start database initialization in background thread
+        import threading
+        db_thread = threading.Thread(target=init_database_async, daemon=True)
+        db_thread.start()
         
-        # Load checklist states
+        # Load checklist states (non-blocking file I/O)
         self.checklist_states = self.load_checklist_states()
         
-        # Initialize checklist items in database if needed
-        self.initialize_checklist_items_in_db()
+        # Initialize checklist items in database if needed (will wait for db to be ready)
+        # This will be called after database is initialized
+        def init_checklist_after_db():
+            # Wait a bit for database to initialize, then try
+            import time
+            max_wait = 5  # Wait up to 5 seconds
+            waited = 0
+            while self.db is None and waited < max_wait:
+                time.sleep(0.1)
+                waited += 0.1
+            if self.db:
+                self.initialize_checklist_items_in_db()
+        
+        # Start checklist initialization in background
+        checklist_thread = threading.Thread(target=init_checklist_after_db, daemon=True)
+        checklist_thread.start()
         
         # UI Components
         self.create_ui()
@@ -232,6 +231,17 @@ class WOInspectionModule:
         # Store container reference for theme updates
         self.main_container = main_container
     
+    def update_db_status_label(self):
+        """Update the database connection status label after async initialization"""
+        if hasattr(self, 'db_status_label') and self.db_status_label:
+            try:
+                db_connected = self.db is not None and hasattr(self.db, 'supabase') and self.db.supabase is not None
+                db_status_text = "🟢 DB Connected" if db_connected else "🔴 DB Disconnected"
+                db_status_color = '#28a745' if db_connected else '#dc3545'
+                self.db_status_label.config(text=db_status_text, fg=db_status_color)
+            except:
+                pass  # Label might have been destroyed
+    
     def create_header(self, parent):
         """Create header section"""
         container_bg = self.colors.get('background', '#F5F7FA')
@@ -257,6 +267,9 @@ class WOInspectionModule:
                                    bg=container_bg,
                                    fg=db_status_color)
         db_status_label.pack(side='right', padx=5)
+        
+        # Store reference to status label for async updates
+        self.db_status_label = db_status_label
         
         # Refresh button
         refresh_btn = tk.Button(button_container, text="🔄 Refresh from DB", font=("Segoe UI", 10),

@@ -30,12 +30,22 @@ class NoticeBoardModule:
             'gray_dark': '#495057',
         }
         
-        # Initialize database
-        try:
-            self.db = OnlineDatabaseManager() if OnlineDatabaseManager else None
-        except Exception as e:
-            print(f"Warning: Could not initialize database: {e}")
-            self.db = None
+        # Initialize database asynchronously to prevent blocking UI
+        self.db = None
+        
+        def init_database_async():
+            try:
+                db = OnlineDatabaseManager() if OnlineDatabaseManager else None
+                # Update database reference in main thread
+                def update_db():
+                    self.db = db
+                self.parent_frame.after(0, update_db)
+            except Exception as e:
+                print(f"Warning: Could not initialize database: {e}")
+        
+        # Start database initialization in background thread
+        db_thread = threading.Thread(target=init_database_async, daemon=True)
+        db_thread.start()
         
         # Categories
         self.categories = ['ALL', 'Processing', 'Client Team', 'Accounting', 'Important']
@@ -498,12 +508,6 @@ class NoticeBoardModule:
         
         is_expanded = self.notice_expanded_states[notice_id].get()
         
-        def toggle_message():
-            """Toggle between short and full message"""
-            self.notice_expanded_states[notice_id].set(not self.notice_expanded_states[notice_id].get())
-            # Re-display the card with toggled state
-            self.load_notices()
-        
         if is_expanded:
             # Show full message
             message_text = message_content
@@ -511,7 +515,17 @@ class NoticeBoardModule:
             # Show truncated message
             message_text = message_content[:max_chars] + "..."
         
-        # Use Text widget for selectable/copyable text (increased height by 50%, reduced width by 40%)
+        # Use Text widget for selectable/copyable text
+        # Calculate dynamic height based on content and expansion state
+        if is_expanded:
+            # For expanded view, calculate lines needed (rough estimate: ~50 chars per line)
+            # Count actual line breaks and estimate wrapped lines
+            line_count = message_content.count('\n') + 1
+            wrapped_lines = max(line_count, (len(message_content) // 50) + 1)
+            text_height = min(wrapped_lines + 2, 25)  # Cap at 25 lines to prevent huge cards
+        else:
+            text_height = 6  # Fixed height for truncated view
+        
         message_text_widget = tk.Text(message_frame,
                                      font=("Arial", 11),
                                      bg=notice.get('card_color', '#ffffff'),
@@ -520,7 +534,7 @@ class NoticeBoardModule:
                                      relief='flat',
                                      borderwidth=0,
                                      highlightthickness=0,
-                                     height=6,  # Increased height by ~50% (from ~4 lines to 6 lines)
+                                     height=text_height,
                                      width=25,  # Reduced width by 40% (from ~42 to 25 characters)
                                      padx=0,
                                      pady=0)
@@ -530,6 +544,39 @@ class NoticeBoardModule:
         
         # "See More" / "See Less" button if message is long
         if len(message_content) > max_chars:
+            def toggle_message():
+                """Toggle between short and full message"""
+                # Toggle the expansion state
+                new_state = not self.notice_expanded_states[notice_id].get()
+                self.notice_expanded_states[notice_id].set(new_state)
+                
+                # Calculate new height based on expansion state
+                if new_state:
+                    # For expanded view, calculate lines needed
+                    line_count = message_content.count('\n') + 1
+                    wrapped_lines = max(line_count, (len(message_content) // 50) + 1)
+                    new_height = min(wrapped_lines + 2, 25)  # Cap at 25 lines
+                else:
+                    new_height = 6  # Fixed height for truncated view
+                
+                # Update the message text widget with new height and content
+                message_text_widget.config(state='normal', height=new_height)
+                message_text_widget.delete('1.0', tk.END)
+                if new_state:
+                    # Show full message
+                    message_text_widget.insert('1.0', message_content)
+                else:
+                    # Show truncated message
+                    message_text_widget.insert('1.0', message_content[:max_chars] + "...")
+                message_text_widget.config(state='disabled')
+                
+                # Update button text
+                see_more_btn.config(text="See Less" if new_state else "See More")
+                
+                # Force update to show the new height
+                message_frame.update_idletasks()
+                card_frame.update_idletasks()
+            
             see_more_btn = tk.Button(message_frame,
                                     text="See Less" if is_expanded else "See More",
                                     font=("Arial", 9, "underline"),
