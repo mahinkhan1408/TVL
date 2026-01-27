@@ -76,15 +76,18 @@ class SplashScreen:
             # Get the correct path to icon file
             if getattr(sys, 'frozen', False):
                 # Running as compiled EXE
+                # Check _MEIPASS first (PyInstaller temp directory)
                 if hasattr(sys, '_MEIPASS'):
-                    base_path = sys._MEIPASS
-                else:
-                    base_path = os.path.dirname(sys.executable)
+                    icon_path = os.path.join(sys._MEIPASS, 'icon1.ico')
+                    if os.path.exists(icon_path):
+                        window.iconbitmap(icon_path)
+                        return
+                # Fallback to executable directory
+                icon_path = os.path.join(os.path.dirname(sys.executable), 'icon1.ico')
             else:
                 # Running as script
-                base_path = os.path.dirname(__file__)
+                icon_path = os.path.join(os.path.dirname(__file__), 'icon1.ico')
             
-            icon_path = os.path.join(base_path, 'icon1.ico')
             if os.path.exists(icon_path):
                 window.iconbitmap(icon_path)
         except Exception as e:
