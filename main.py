@@ -16,7 +16,7 @@ try:
     GITHUB_REPO = "mahinkhan1408/TVL"  # GitHub repository for automatic updates
     
     # Current app version (semantic versioning: MAJOR.MINOR.PATCH)
-    APP_VERSION = "1.1.1"  # Production version
+    APP_VERSION = "1.2.2"  # Production version
 except ImportError:
     # Update system not available (development mode or missing dependencies)
     UpdateManager = None

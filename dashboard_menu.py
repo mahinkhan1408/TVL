@@ -4,6 +4,7 @@ from tkinter import messagebox, ttk, filedialog
 from bid_writer_module import BidWriterApp
 from notice_board_module import NoticeBoardModule
 from vendor_price_module import VendorPriceModule
+from client_allowables_module import ClientAllowablesModule
 from gc_roof_ce_module import GCRoofCEModule
 from letterhead_bid_module import LetterheadBidModule
 from approval_module import ApprovalModule
@@ -2027,8 +2028,9 @@ class DashboardMenu:
             messagebox.showerror("Error", f"Failed to open Special Contractor Price module: {e}")
 
     def open_client_allowables(self):
-        """Open Client Allowables module (placeholder)"""
-        messagebox.showinfo("Coming Soon", "Client Allowables module is coming soon.")
+        """Open Client Allowables module"""
+        new_window = tk.Toplevel(self.root)
+        ClientAllowablesModule(new_window)
 
     def open_vendor_price(self):
         new_window = tk.Toplevel(self.root)
@@ -2202,7 +2204,7 @@ class DashboardMenu:
                 fg=self.colors['text_primary'], 
                 bg=self.colors['white']).pack(anchor='w')
         
-        tk.Label(info_content, text="Version 1.1.1", 
+        tk.Label(info_content, text="Version 1.2.2", 
                 font=("Arial", 10), 
                 fg=self.colors['text_secondary'], 
                 bg=self.colors['white']).pack(anchor='w', pady=(5, 10))
@@ -2237,11 +2239,11 @@ class DashboardMenu:
             else:
                 version_file = os.path.join(os.path.dirname(__file__), "version.txt")
             
-            current_version = "1.1.1"
+            current_version = "1.2.2"
             if os.path.exists(version_file):
                 try:
                     with open(version_file, 'r') as f:
-                        current_version = f.read().strip() or "1.1.1"
+                        current_version = f.read().strip() or "1.2.2"
                 except:
                     pass
             
@@ -2279,11 +2281,11 @@ class DashboardMenu:
                             else:
                                 version_file = os.path.join(os.path.dirname(__file__), "version.txt")
                             
-                            current_version = "1.1.1"
+                            current_version = "1.2.2"
                             if os.path.exists(version_file):
                                 try:
                                     with open(version_file, 'r') as f:
-                                        current_version = f.read().strip() or "1.1.1"
+                                        current_version = f.read().strip() or "1.2.2"
                                 except:
                                     pass
                             

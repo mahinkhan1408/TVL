@@ -45,7 +45,7 @@ class UpdateManager:
         else:
             # Running as script
             self.app_dir = Path(__file__).parent
-            self.app_exe = "PreservationApp.exe"  # Default name
+            self.app_exe = "Preservation Universe.exe"  # Default name
         
         self.version_file = self.app_dir / "version.txt"
         self.updater_exe = self.app_dir / "updater.exe"

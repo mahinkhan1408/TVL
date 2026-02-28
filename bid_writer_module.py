@@ -61,21 +61,21 @@ class BidWriterApp:
             self.db = None
 
         self.title_frame = tk.Frame(self.root, bg=self.colors['primary_blue'], height=60)
-        self.title_frame.pack(fill='x', pady=(0, 10))
+        self.title_frame.pack(fill='x', pady=(0, 3))
         self.title_frame.pack_propagate(False)
         
         self.username_label = tk.Label(self.title_frame, text=f"{username}", 
                                        font=("Arial", 12, "bold"), fg='white', 
                                        bg=self.colors['primary_blue'])
-        self.username_label.pack(side="left", padx=20)
+        self.username_label.pack(side="left", padx=12)
         
         # Search frame in the center
         self.search_frame = tk.Frame(self.title_frame, bg=self.colors['primary_blue'])
-        self.search_frame.pack(side="left", expand=True, padx=(20, 0))
+        self.search_frame.pack(side="left", expand=True, padx=(12, 0))
         
         # Search functionality
         search_container = tk.Frame(self.search_frame, bg=self.colors['white'], relief="solid", bd=1)
-        search_container.pack(anchor="center", pady=10)
+        search_container.pack(anchor="center", pady=4)
         
         self.search_entry = tk.Entry(search_container, font=("Arial", 11), relief="flat", bd=0, 
                                     width=30, bg=self.colors['white'], fg=self.colors['text_primary'])
@@ -99,7 +99,7 @@ class BidWriterApp:
                                        fg="white", relief="flat", cursor="hand2",
                                        activebackground=self.colors['primary_blue'],
                                        command=self.refresh_bids)
-        self.refresh_button.pack(side="right", padx=(0, 20))
+        self.refresh_button.pack(side="right", padx=(0, 12))
 
         self.categories = {}
         self.all_items = {}
@@ -125,10 +125,10 @@ class BidWriterApp:
         self._updating_all_previews = False  # Flag to prevent cascading updates
 
         self.category_frame = tk.Frame(self.root, bg=self.colors['background'])
-        self.category_frame.pack(pady=10, anchor="w", padx=20, fill="x")
+        self.category_frame.pack(pady=4, anchor="w", padx=12, fill="x")
 
         self.main_content_frame = tk.Frame(self.root, bg=self.colors['background'])
-        self.main_content_frame.pack(pady=10, fill="both", expand=True, padx=20)
+        self.main_content_frame.pack(pady=4, fill="both", expand=True, padx=12)
 
         self.canvas = tk.Canvas(self.main_content_frame, bg=self.colors['white'], 
                                 highlightthickness=1, highlightcolor=self.colors['gray_light'])
@@ -198,7 +198,7 @@ class BidWriterApp:
         self.canvas.pack(side="left", fill="both", expand=True)
         
         self.wo_frame = tk.Frame(self.root, bg=self.colors['background'])
-        self.wo_frame.pack(pady=(10, 0), padx=20, fill='x')
+        self.wo_frame.pack(pady=(4, 0), padx=12, fill='x')
 
         self.wo_label = tk.Label(self.wo_frame, text="WO: ", 
                                  font=("Arial", 11, "bold"), bg=self.colors['background'], 
@@ -248,7 +248,7 @@ class BidWriterApp:
 
 
         self.buttons_container = tk.Frame(self.root, bg=self.colors['background'])
-        self.buttons_container.pack(pady=10)
+        self.buttons_container.pack(pady=4)
 
         self.generate_button = tk.Button(self.buttons_container, text="Generate Bids", command=self.generate_bids,
                                          font=("Arial", 12, "bold"), bg=self.colors['green'], 
@@ -271,7 +271,7 @@ class BidWriterApp:
         self.docs2_button.pack(side="left", padx=(0, 10))
 
         self.output_frame = tk.Frame(self.root, bg=self.colors['gray_light'], relief="solid", bd=1)
-        self.output_frame.pack(padx=20, pady=(0, 10), fill='both', expand=False)
+        self.output_frame.pack(padx=12, pady=(0, 4), fill='both', expand=False)
         
         self.output_header_frame = tk.Frame(self.output_frame, bg=self.colors['gray_light'])
         self.output_header_frame.pack(fill='x', padx=2, pady=(2, 0))
@@ -300,15 +300,6 @@ class BidWriterApp:
 
         self.output_text.images = []
 
-        self.footer_frame = tk.Frame(self.root, bg=self.colors['primary_blue'], height=40)
-        self.footer_frame.pack(fill='x', side='bottom')
-        self.footer_frame.pack_propagate(False)
-        
-        self.footer_label = tk.Label(self.footer_frame, text="All rights reserved Preservation Universe", 
-                                     font=("Arial", 10), fg='white', 
-                                     bg=self.colors['primary_blue'])
-        self.footer_label.pack(expand=True)
-        
         self.app_data_dir = os.path.join(os.path.expanduser("~"), ".techvengers_bidwriter")
         os.makedirs(self.app_data_dir, exist_ok=True)
         self.root.bind('<Control-v>', self.handle_global_paste)
@@ -590,13 +581,11 @@ class BidWriterApp:
         self.buttons_container.configure(bg=self.colors['background'])
         self.output_frame.configure(bg=self.colors['gray_light'])
         self.output_header_frame.configure(bg=self.colors['gray_light'])
-        self.footer_frame.configure(bg=self.colors['primary_blue'])
         
         # Update labels
         self.username_label.configure(bg=self.colors['primary_blue'], fg=self.colors['button_text'])
         self.wo_label.configure(bg=self.colors['background'], fg=self.colors['primary_blue'])
         self.bid_count_label.configure(bg=self.colors['gray_light'], fg=self.colors['gray_dark'])
-        self.footer_label.configure(bg=self.colors['primary_blue'], fg=self.colors['button_text'])
         
         # Update search elements
         self.search_frame.configure(bg=self.colors['primary_blue'])
@@ -691,7 +680,7 @@ class BidWriterApp:
             row = idx // buttons_per_row
             col = idx % buttons_per_row
             
-            btn.grid(row=row, column=col, padx=5, pady=5, sticky="ew")
+            btn.grid(row=row, column=col, padx=2, pady=2, sticky="ew")
         
         # Configure grid columns to have equal weight
         for col in range(buttons_per_row):
@@ -898,7 +887,7 @@ class BidWriterApp:
             widget.destroy()
         
         grid_frame = tk.Frame(self.scrollable_frame, bg=self.colors['white'])
-        grid_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        grid_frame.pack(fill="both", expand=True, padx=4, pady=4)
         self.bind_mousewheel_to_widget(grid_frame)
         
         # Column configurations
@@ -925,7 +914,7 @@ class BidWriterApp:
             header_frame.grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
             label = tk.Label(header_frame, text=heading, font=("Arial", 11, "bold"), 
                              bg=self.colors['primary_blue'], fg='white', anchor="w")
-            label.pack(fill="both", expand=True, padx=8, pady=8)
+            label.pack(fill="both", expand=True, padx=4, pady=4)
             self.bind_mousewheel_to_widget(header_frame)
             self.bind_mousewheel_to_widget(label)
         
@@ -1353,7 +1342,7 @@ class BidWriterApp:
             widget.destroy()
 
         grid_frame = tk.Frame(self.scrollable_frame, bg=self.colors['white'])
-        grid_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        grid_frame.pack(fill="both", expand=True, padx=4, pady=4)
         
         # Bind mouse wheel events to the grid frame
         self.bind_mousewheel_to_widget(grid_frame)
@@ -1387,7 +1376,7 @@ class BidWriterApp:
             
             label = tk.Label(header_frame, text=heading, font=("Arial", 11, "bold"), 
                              bg=self.colors['primary_blue'], fg='white', anchor="w")
-            label.pack(fill="both", expand=True, padx=8, pady=8)
+            label.pack(fill="both", expand=True, padx=4, pady=4)
             
             # Bind mouse wheel events to header elements
             self.bind_mousewheel_to_widget(header_frame)
@@ -3582,6 +3571,9 @@ class BidWriterApp:
                 
                 # Insert photo if available
                 self._insert_photo_to_text(full_page_text, photo_key)
+                
+                # Add blank line after each bid for visual separation
+                full_page_text.insert(tk.END, "\n")
                 bid_number += 1
         
         # Process standalone bids
@@ -3603,6 +3595,9 @@ class BidWriterApp:
             
             # Insert photo if available
             self._insert_photo_to_text(full_page_text, photo_key)
+            
+            # Add blank line after each bid for visual separation
+            full_page_text.insert(tk.END, "\n")
             bid_number += 1
         
         full_page_text.config(state=tk.DISABLED)
@@ -3642,7 +3637,7 @@ class BidWriterApp:
                     text_widget.images = []
                 text_widget.images.append(photo_for_output)
                 
-                text_widget.insert(tk.END, "\n\n")
+                text_widget.insert(tk.END, "\n")
             except Exception as e:
                 print(f"Error inserting image in full page view: {e}")
 
