@@ -297,6 +297,7 @@ class DashboardMenu:
             ("Open Project", "Continue your saved work", "📂", self.show_bid_writer_dashboard),
             ("Cost Estimator", "GC/Roof change orders", "🏗️", self.open_gc_roof_ce),
             ("Price Sheet", "Client and Vendor", "💲", self.show_price_sheet_page),
+            ("Client Submission", "Client submissions", "📤", self.open_client_submission_card),
             ("Letterheads", "Letterhead bids", "📝", self.open_letterhead_bid),
             ("Notice Boards", "Announcements", "📢", self.open_notice_board),
             ("Photo Viewer", "View and edit images", "🖼️", self.open_photo_viewer),
@@ -2035,6 +2036,60 @@ class DashboardMenu:
     def open_vendor_price(self):
         new_window = tk.Toplevel(self.root)
         VendorPriceModule(new_window)
+
+    def open_client_submission_card(self):
+        """Display the Client Submission full-page section inside the dashboard."""
+        self.clear_content_frame()
+
+        submission_frame = tk.Frame(
+            self.main_content_frame,
+            bg=self.colors['background'],
+            padx=20,
+            pady=20
+        )
+        submission_frame.pack(fill="both", expand=True)
+
+        # Back to Dashboard bar
+        self._add_back_bar(submission_frame, "Client Submission")
+
+        # Header
+        header_frame = tk.Frame(submission_frame, bg=self.colors['background'])
+        header_frame.pack(fill="x", pady=(0, 20))
+        tk.Label(
+            header_frame,
+            text="Client Submission",
+            font=("Arial", 24, "bold"),
+            fg=self.colors['primary_blue'],
+            bg=self.colors['background']
+        ).pack(side="left")
+
+        # Cards grid (match dashboard card size/layout)
+        cards_wrap = tk.Frame(submission_frame, bg=self.colors['background'])
+        cards_wrap.pack(fill='both', expand=True, padx=20, pady=(5, 20))
+
+        grid = tk.Frame(cards_wrap, bg=self.colors['background'])
+        grid.pack(fill='both', expand=True)
+        for i in range(4):
+            grid.grid_columnconfigure(i, weight=1, uniform='col')
+
+        # Only one option card under Client Submission
+        self._create_dashboard_card(
+            grid,
+            row=0,
+            col=0,
+            icon="🔢",
+            title="9102 Submission",
+            subtitle="9102 submission workflow",
+            command=self.open_9102_submission
+        )
+
+        # Keep consistent row height like other pages
+        for empty_row in range(1, 3):
+            grid.grid_rowconfigure(empty_row, weight=1)
+
+    def open_9102_submission(self):
+        """Placeholder for the 9102 Submission page/logic."""
+        messagebox.showinfo("Coming Soon", "9102 Submission module is coming soon.")
 
     def open_gc_roof_ce(self):
         new_window = tk.Toplevel(self.root)
